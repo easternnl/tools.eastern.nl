@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IBM J9 GC Log Analyzer</title>
+  <!-- Google Fonts: Outfit for headers, Inter for UI copy, Fira Code for code/logs -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- CSS Stylesheet -->
+  <link rel="stylesheet" href="index.css">
+  
+  <!-- Chart.js and Lucide Icons via CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+  
+  <!-- Fullscreen Uploader Overlay/Landing Screen -->
+  <div id="upload-screen" class="upload-container">
+    <div class="upload-glow-1"></div>
+    <div class="upload-glow-2"></div>
+    <div class="upload-card">
+      <div class="upload-icon-wrapper">
+        <i data-lucide="file-symlink" class="upload-icon"></i>
+      </div>
+      <h1 class="upload-title">JVM GC Log Analyzer</h1>
+      <p class="upload-subtitle">Analyze IBM J9 / Semeru verbosegc XML log files completely client-side in your browser.</p>
+      
+      <div id="drop-zone" class="drop-zone">
+        <i data-lucide="upload-cloud" class="drop-icon animate-bounce"></i>
+        <p class="drop-text">Drag & drop your <code>.log</code> file here, or <span class="browse-link">browse files</span></p>
+        <p class="drop-help">Supports large log files (up to 100MB+)</p>
+        <input type="file" id="file-input" accept=".log,.txt,.xml" class="hidden-input">
+      </div>
+      
+      <div id="file-preview-card" class="file-preview-card hidden">
+        <div class="file-info">
+          <i data-lucide="file-text" class="file-text-icon"></i>
+          <div>
+            <div id="file-name" class="file-name-text">filename.log</div>
+            <div id="file-size" class="file-size-text">0.0 MB</div>
+          </div>
+        </div>
+        <button id="analyze-btn" class="analyze-btn">
+          <span>Start Analysis</span>
+          <i data-lucide="arrow-right" class="btn-arrow"></i>
+        </button>
+      </div>
+
+      <div class="sample-info">
+        <p>To analyze the example log in this workspace, select: <br><strong><code>gc-for-ai-analysis.log</code></strong></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Loading Overlay Screen -->
+  <div id="loading-screen" class="loading-screen hidden">
+    <div class="spinner-container">
+      <div class="loading-spinner"></div>
+      <h2 id="loading-status" class="loading-title">Reading file...</h2>
+      <p id="loading-details" class="loading-subtitle">Preparing buffer...</p>
+      <div class="progress-bar-container">
+        <div id="loading-progress" class="progress-bar-fill" style="width: 0%"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Dashboard Application Layout -->
+  <div id="app-container" class="app-container hidden">
+    
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="logo-wrapper">
+          <i data-lucide="activity" class="logo-icon"></i>
+          <span class="logo-text">GC-J9 <span class="logo-highlight">Insight</span></span>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <button class="nav-item active" data-tab="dashboard">
+          <i data-lucide="layout-dashboard"></i>
+          <span>Dashboard</span>
+        </button>
+        <button class="nav-item" data-tab="memory">
+          <i data-lucide="cpu"></i>
+          <span>Memory Profile</span>
+        </button>
+        <button class="nav-item" data-tab="gc-perf">
+          <i data-lucide="gauge"></i>
+          <span>GC Performance</span>
+        </button>
+        <button class="nav-item" data-tab="explorer">
+          <i data-lucide="table"></i>
+          <span>GC Explorer</span>
+        </button>
+        <button class="nav-item" data-tab="diagnostics">
+          <i data-lucide="shield-alert"></i>
+          <span>Diagnostics</span>
+          <span id="diagnostic-badge" class="badge hidden">0</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <!-- Theme Selector Switch -->
+        <div class="theme-switch-wrapper">
+          <span class="theme-label">Theme</span>
+          <button id="theme-toggle" class="theme-toggle-btn" aria-label="Toggle light/dark theme">
+            <div class="theme-toggle-slider"></div>
+            <i data-lucide="sun" class="sun-icon"></i>
+            <i data-lucide="moon" class="moon-icon"></i>
+          </button>
+        </div>
+        <!-- Load another file -->
+        <button id="new-file-btn" class="new-file-btn">
+          <i data-lucide="refresh-cw"></i>
+          <span>Analyze New File</span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- Main Workspace Area -->
+    <main class="main-content">
+      
+      <!-- Top Workspace Header -->
+      <header class="app-header">
+        <div class="header-left">
+          <h1 id="view-title" class="view-title">Dashboard Overview</h1>
+          <span id="current-filename" class="header-filename">gc-log.log</span>
+        </div>
+        <div class="header-right">
+          <div class="header-stat">
+            <span class="stat-label">GC Cycles</span>
+            <span id="header-total-cycles" class="stat-value">0</span>
+          </div>
+          <div class="header-divider"></div>
+          <div class="header-stat">
+            <span class="stat-label">Overhead</span>
+            <span id="header-overhead-pct" class="stat-value">0.0%</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- TAB 1: DASHBOARD OVERVIEW -->
+      <section id="dashboard" class="tab-pane active">
+        <!-- Summary Stat Cards -->
+        <div class="kpi-grid">
+          <div class="kpi-card">
+            <div class="kpi-icon-wrapper blue">
+              <i data-lucide="clock"></i>
+            </div>
+            <div class="kpi-content">
+              <span class="kpi-label">GC Pause Overhead</span>
+              <h3 id="kpi-overhead" class="kpi-value">0.00%</h3>
+              <span id="kpi-overhead-sub" class="kpi-subtext">0 ms total GC time</span>
+            </div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-icon-wrapper red">
+              <i data-lucide="hourglass"></i>
+            </div>
+            <div class="kpi-content">
+              <span class="kpi-label">Max GC Pause Time</span>
+              <h3 id="kpi-max-pause" class="kpi-value">0.0 ms</h3>
+              <span id="kpi-max-pause-type" class="kpi-subtext">Global GC</span>
+            </div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-icon-wrapper green">
+              <i data-lucide="zap"></i>
+            </div>
+            <div class="kpi-content">
+              <span class="kpi-label">Avg Scavenge Pause</span>
+              <h3 id="kpi-avg-scavenge" class="kpi-value">0.0 ms</h3>
+              <span id="kpi-scavenge-count" class="kpi-subtext">0 scavenge cycles</span>
+            </div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-icon-wrapper amber">
+              <i data-lucide="package-open"></i>
+            </div>
+            <div class="kpi-content">
+              <span class="kpi-label">Avg GC Interval</span>
+              <h3 id="kpi-avg-interval" class="kpi-value">0.0s</h3>
+              <span id="kpi-interval-frequency" class="kpi-subtext">GC Frequency</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="dashboard-grid">
+          <!-- Column 1: JVM Init Specs -->
+          <div class="grid-card glass span-1">
+            <div class="card-header">
+              <h3 class="card-title">JVM & Environment Attributes</h3>
+              <i data-lucide="server" class="card-header-icon"></i>
+            </div>
+            <div class="card-body">
+              <div class="spec-list">
+                <div class="spec-item">
+                  <span class="spec-label">GC Policy</span>
+                  <span id="spec-policy" class="spec-val">-</span>
+                </div>
+                <div class="spec-item">
+                  <span class="spec-label">Max Heap Size</span>
+                  <span id="spec-max-heap" class="spec-val">-</span>
+                </div>
+                <div class="spec-item">
+                  <span class="spec-label">Initial Heap Size</span>
+                  <span id="spec-init-heap" class="spec-val">-</span>
+                </div>
+                <div class="spec-item">
+                  <span class="spec-label">GC Parallel Threads</span>
+                  <span id="spec-gc-threads" class="spec-val">-</span>
+                </div>
+                <div class="spec-item">
+                  <span class="spec-label">CPU Cores (Active)</span>
+                  <span id="spec-cpus" class="spec-val">-</span>
+                </div>
+                <div class="spec-item">
+                  <span class="spec-label">Operating System</span>
+                  <span id="spec-os" class="spec-val">-</span>
+                </div>
+                <div class="spec-item">
+                  <span class="spec-label">Compressed Refs</span>
+                  <span id="spec-compressed-refs" class="spec-val">-</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Column 2: Quick Allocation Stats & Totals -->
+          <div class="grid-card glass span-1">
+            <div class="card-header">
+              <h3 class="card-title">GC Event Breakdown</h3>
+              <i data-lucide="pie-chart" class="card-header-icon"></i>
+            </div>
+            <div class="card-body flex-center">
+              <div class="chart-wrapper-small">
+                <canvas id="gcBreakdownChart"></canvas>
+              </div>
+              <div class="breakdown-legend">
+                <div class="legend-item">
+                  <span class="legend-dot scavenge"></span>
+                  <span class="legend-label">Scavenge GCs</span>
+                  <span id="legend-scavenge-val" class="legend-val">0 (0%)</span>
+                </div>
+                <div class="legend-item">
+                  <span class="legend-dot global"></span>
+                  <span class="legend-label">Global GCs</span>
+                  <span id="legend-global-val" class="legend-val">0 (0%)</span>
+                </div>
+                <div class="legend-item">
+                  <span class="legend-dot expansions"></span>
+                  <span class="legend-label">Heap Resizes</span>
+                  <span id="legend-resize-val" class="legend-val">0 resizes</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- VM Arguments Card -->
+          <div class="grid-card glass span-2">
+            <div class="card-header">
+              <h3 class="card-title">JVM Start Arguments</h3>
+              <i data-lucide="terminal" class="card-header-icon"></i>
+            </div>
+            <div class="card-body">
+              <div id="vmargs-container" class="vmargs-list">
+                <!-- Loaded dynamically -->
+                <p class="empty-state">No arguments found in log header.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2: MEMORY PROFILE CHART -->
+      <section id="memory" class="tab-pane">
+        <div class="grid-card glass chart-card">
+          <div class="card-header">
+            <div class="header-group">
+              <h3 class="card-title">Heap Memory Allocation and Usage</h3>
+              <p class="card-subtitle">Detailed timeline of Heap sizing and memory values before and after GC events.</p>
+            </div>
+            <div class="chart-controls">
+              <span class="chart-control-label">View Area:</span>
+              <button class="btn-toggle active" data-memory-view="heap">Total Heap</button>
+              <button class="btn-toggle" data-memory-view="nursery">Nursery Space</button>
+              <button class="btn-toggle" data-memory-view="tenure">Tenure Space</button>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="chart-container-large">
+              <canvas id="memoryChart"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <div class="dashboard-grid mt-4">
+          <div class="grid-card glass span-1">
+            <div class="card-header">
+              <h3 class="card-title">Heap Resizing Summary</h3>
+              <i data-lucide="arrow-up-right-down-left" class="card-header-icon"></i>
+            </div>
+            <div class="card-body">
+              <div class="spec-list">
+                <div class="spec-item">
+                  <span class="spec-label">Heap Expansions</span>
+                  <span id="resize-expansions-count" class="spec-val">0</span>
+                </div>
+                <div class="spec-item">
+                  <span class="spec-label">Heap Contractions</span>
+                  <span id="resize-contractions-count" class="spec-val">0</span>
+                </div>
+                <div class="spec-item">
+                  <span class="spec-label">Max Heap Observed</span>
+                  <span id="resize-max-heap-size" class="spec-val">0 MB</span>
+                </div>
+                <div class="spec-item">
+                  <span class="spec-label">Avg Expansions Size</span>
+                  <span id="resize-avg-expansion" class="spec-val">0 MB</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid-card glass span-1">
+            <div class="card-header">
+              <h3 class="card-title">Memory Allocation Speed</h3>
+              <i data-lucide="trending-up" class="card-header-icon"></i>
+            </div>
+            <div class="card-body">
+              <div class="spec-list">
+                <div class="spec-item">
+                  <span class="spec-label">Total Allocated Bytes</span>
+                  <span id="alloc-total-bytes" class="spec-val">0 GB</span>
+                </div>
+                <div class="spec-item">
+                  <span class="spec-label">Average Allocation Rate</span>
+                  <span id="alloc-rate-sec" class="spec-val">0 MB/s</span>
+                </div>
+                <div class="spec-item">
+                  <span class="spec-label">Total Garbage Collected</span>
+                  <span id="alloc-reclaimed-total" class="spec-val">0 GB</span>
+                </div>
+                <div class="spec-item">
+                  <span class="spec-label">Avg Memory Reclaimed / GC</span>
+                  <span id="alloc-reclaimed-avg" class="spec-val">0 MB</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 3: GC PERFORMANCE -->
+      <section id="gc-perf" class="tab-pane">
+        <div class="grid-card glass chart-card">
+          <div class="card-header">
+            <div>
+              <h3 class="card-title">GC Pauses Timeline</h3>
+              <p class="card-subtitle">Pause time durations of GC operations (ms) across the timeline.</p>
+            </div>
+            <div class="chart-legend-labels">
+              <span class="dot-indicator scavenge">Scavenge Pause</span>
+              <span class="dot-indicator global">Global Pause</span>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="chart-container-large">
+              <canvas id="gcDurationChart"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid-card glass chart-card mt-4">
+          <div class="card-header">
+            <div>
+              <h3 class="card-title">Memory Reclaimed per Event</h3>
+              <p class="card-subtitle">Reclaimed garbage volume (MB) per GC event.</p>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="chart-container-large">
+              <canvas id="reclaimedChart"></canvas>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 4: GC EVENT EXPLORER -->
+      <section id="explorer" class="tab-pane">
+        <div class="grid-card glass table-card">
+          <!-- Table Controls / Filters -->
+          <div class="table-filter-bar">
+            <div class="search-input-wrapper">
+              <i data-lucide="search" class="search-icon"></i>
+              <input type="text" id="log-search" placeholder="Search by Thread ID, Timestamp...">
+            </div>
+            <div class="filters-group">
+              <select id="filter-type">
+                <option value="all">All GC Types</option>
+                <option value="scavenge">Scavenge Only</option>
+                <option value="global">Global Only</option>
+              </select>
+              <select id="filter-duration">
+                <option value="all">All Durations</option>
+                <option value="50">&gt; 50ms</option>
+                <option value="200">&gt; 200ms</option>
+                <option value="1000">&gt; 1000ms</option>
+              </select>
+              <select id="filter-resize">
+                <option value="all">All Events</option>
+                <option value="resized">Resized Heap Only</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Table Container -->
+          <div class="table-wrapper">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th class="sortable" data-sort="id">ID <i data-lucide="chevron-down" class="sort-icon"></i></th>
+                  <th class="sortable" data-sort="timestamp">Timestamp <i data-lucide="chevron-down" class="sort-icon"></i></th>
+                  <th class="sortable" data-sort="type">Type <i data-lucide="chevron-down" class="sort-icon"></i></th>
+                  <th class="sortable text-right" data-sort="duration">Duration (ms) <i data-lucide="chevron-down" class="sort-icon"></i></th>
+                  <th class="sortable text-right" data-sort="before">Heap Before <i data-lucide="chevron-down" class="sort-icon"></i></th>
+                  <th class="sortable text-right" data-sort="after">Heap After <i data-lucide="chevron-down" class="sort-icon"></i></th>
+                  <th class="sortable text-right" data-sort="reclaimed">Reclaimed <i data-lucide="chevron-down" class="sort-icon"></i></th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody id="log-table-body">
+                <!-- Populated dynamically -->
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Table Pagination Footer -->
+          <div class="table-pagination">
+            <div class="pagination-info">
+              Showing <span id="pag-start">0</span> to <span id="pag-end">0</span> of <span id="pag-total">0</span> events
+            </div>
+            <div class="pagination-controls">
+              <button id="pag-prev-btn" class="pag-btn"><i data-lucide="chevron-left"></i></button>
+              <div id="pag-numbers" class="pag-numbers">
+                <!-- Numbers loaded dynamically -->
+              </div>
+              <button id="pag-next-btn" class="pag-btn"><i data-lucide="chevron-right"></i></button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 5: AI DIAGNOSTICS & INSIGHTS -->
+      <section id="diagnostics" class="tab-pane">
+        <div class="diagnostics-summary">
+          <div class="diag-header-info">
+            <h2>Diagnostic Health Center</h2>
+            <p>Automated static analysis of GC events, garbage trends, and heap metrics.</p>
+          </div>
+          <div class="health-gauge">
+            <div class="gauge-label">Heap Health Status</div>
+            <div id="health-status-text" class="gauge-value text-green">Good</div>
+          </div>
+        </div>
+
+        <div id="diagnostics-alerts" class="alerts-container">
+          <!-- Loaded dynamically -->
+          <div class="alert-item success">
+            <div class="alert-icon">
+              <i data-lucide="shield-check"></i>
+            </div>
+            <div class="alert-content">
+              <h4 class="alert-title">No Performance Hazards Found</h4>
+              <p class="alert-desc">The log analyzer has completed checks on heap resizing, allocation failure rates, and memory recovery slopes. Your parameters appear to be well-balanced.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid-card glass mt-4">
+          <div class="card-header">
+            <h3 class="card-title">GC Optimization Recommendations</h3>
+            <i data-lucide="lightbulb" class="card-header-icon text-amber"></i>
+          </div>
+          <div class="card-body">
+            <ul id="recommendation-list" class="recommendation-list">
+              <li>
+                <strong>Heap Sizing Recommendation</strong>
+                <p>Ensure the initial heap matches the active max heap. Since your initial heap size is smaller than your max heap size, the JVM spent extra overhead resizing the heap early on. Consider setting <code>-Xms</code> equal to <code>-Xmx</code> to eliminate startup resize latency.</p>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- SLIDE-OUT DETAIL DRAWER (GC INSPECTOR) -->
+  <div id="detail-drawer" class="drawer-overlay hidden">
+    <div class="drawer-content">
+      <div class="drawer-header">
+        <div class="drawer-title-group">
+          <h2 class="drawer-title">GC Event Inspector</h2>
+          <span id="drawer-event-id" class="drawer-subtitle">Event ID: #0</span>
+        </div>
+        <button id="close-drawer-btn" class="close-drawer-btn">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+
+      <div class="drawer-body">
+        
+        <!-- Tabbed Inspector Views -->
+        <div class="drawer-tabs">
+          <button class="drawer-tab-btn active" data-drawer-tab="metrics">Overview</button>
+          <button class="drawer-tab-btn" data-drawer-tab="subspaces">Subspaces</button>
+          <button class="drawer-tab-btn" data-drawer-tab="xml">Raw XML Structure</button>
+        </div>
+
+        <!-- View 1: Metrics Overview -->
+        <div id="drawer-tab-metrics" class="drawer-tab-panel active">
+          <div class="drawer-stats-grid">
+            <div class="drawer-stat-box">
+              <span class="box-label">Timestamp</span>
+              <span id="drawer-time" class="box-val">-</span>
+            </div>
+            <div class="drawer-stat-box">
+              <span class="box-label">Pause Duration</span>
+              <span id="drawer-duration" class="box-val">-</span>
+            </div>
+            <div class="drawer-stat-box">
+              <span class="box-label">GC Cycle Type</span>
+              <span id="drawer-type" class="box-val">-</span>
+            </div>
+            <div class="drawer-stat-box">
+              <span class="box-label">Memory Reclaimed</span>
+              <span id="drawer-reclaimed" class="box-val">-</span>
+            </div>
+          </div>
+
+          <h3 class="section-title">Timeline Performance</h3>
+          <table class="drawer-mini-table">
+            <tbody>
+              <tr>
+                <td>System CPU Time</td>
+                <td id="drawer-cpu-system" class="text-right font-mono">-</td>
+              </tr>
+              <tr>
+                <td>User CPU Time</td>
+                <td id="drawer-cpu-user" class="text-right font-mono">-</td>
+              </tr>
+              <tr>
+                <td>GC Thread Stalls</td>
+                <td id="drawer-stalls" class="text-right font-mono">-</td>
+              </tr>
+              <tr>
+                <td>Active GC Threads</td>
+                <td id="drawer-active-threads" class="text-right font-mono">-</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <h3 class="section-title">Allocations & Resizing</h3>
+          <table class="drawer-mini-table">
+            <tbody>
+              <tr>
+                <td>Bytes Requested</td>
+                <td id="drawer-req-bytes" class="text-right font-mono">-</td>
+              </tr>
+              <tr>
+                <td>Trigger Reason</td>
+                <td id="drawer-trigger" class="text-right font-mono">Allocation Failure</td>
+              </tr>
+              <tr>
+                <td>Heap Resizing Event</td>
+                <td id="drawer-resize-event" class="text-right font-mono">None</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- View 2: Subspace Breakdown -->
+        <div id="drawer-tab-subspaces" class="drawer-tab-panel">
+          <h3 class="section-title">Nursery (Minor Space)</h3>
+          <table class="drawer-mini-table">
+            <thead>
+              <tr>
+                <th>Area</th>
+                <th class="text-right">Before GC</th>
+                <th class="text-right">After GC</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Nursery Total</td>
+                <td id="drawer-nursery-tot-before" class="text-right font-mono">-</td>
+                <td id="drawer-nursery-tot-after" class="text-right font-mono">-</td>
+              </tr>
+              <tr>
+                <td>Nursery Free</td>
+                <td id="drawer-nursery-free-before" class="text-right font-mono">-</td>
+                <td id="drawer-nursery-free-after" class="text-right font-mono">-</td>
+              </tr>
+              <tr>
+                <td>↳ Allocate Space Free</td>
+                <td id="drawer-alloc-free-before" class="text-right font-mono">-</td>
+                <td id="drawer-alloc-free-after" class="text-right font-mono">-</td>
+              </tr>
+              <tr>
+                <td>↳ Survivor Space Free</td>
+                <td id="drawer-surv-free-before" class="text-right font-mono">-</td>
+                <td id="drawer-surv-free-after" class="text-right font-mono">-</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <h3 class="section-title mt-4">Tenure (Major Space)</h3>
+          <table class="drawer-mini-table">
+            <thead>
+              <tr>
+                <th>Area</th>
+                <th class="text-right">Before GC</th>
+                <th class="text-right">After GC</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Tenure Total</td>
+                <td id="drawer-tenure-tot-before" class="text-right font-mono">-</td>
+                <td id="drawer-tenure-tot-after" class="text-right font-mono">-</td>
+              </tr>
+              <tr>
+                <td>Tenure Free</td>
+                <td id="drawer-tenure-free-before" class="text-right font-mono">-</td>
+                <td id="drawer-tenure-free-after" class="text-right font-mono">-</td>
+              </tr>
+              <tr>
+                <td>↳ Small Object Area (SOA) Free</td>
+                <td id="drawer-soa-free-before" class="text-right font-mono">-</td>
+                <td id="drawer-soa-free-after" class="text-right font-mono">-</td>
+              </tr>
+              <tr>
+                <td>↳ Large Object Area (LOA) Free</td>
+                <td id="drawer-loa-free-before" class="text-right font-mono">-</td>
+                <td id="drawer-loa-free-after" class="text-right font-mono">-</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- View 3: Formatted XML Raw Viewer -->
+        <div id="drawer-tab-xml" class="drawer-tab-panel">
+          <p class="xml-help-text">Original XML structure parsed for this GC event:</p>
+          <pre class="xml-pre-code"><code id="drawer-raw-xml" class="xml-code">...</code></pre>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- JavaScript Entry Logic -->
+  <script src="app.js"></script>
+</body>
+</html>
