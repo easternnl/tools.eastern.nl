@@ -1,0 +1,1165 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Java GC Log Analyzer</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+  <style>
+    :root {
+      --bg:          #0d1117;
+      --surface:     #161b22;
+      --surface2:    #1f2937;
+      --border:      #30363d;
+      --text:        #e6edf3;
+      --muted:       #7d8590;
+      --primary:     #7c3aed;
+      --primary-dim: rgba(124,58,237,.15);
+      --success:     #22c55e;
+      --warning:     #f59e0b;
+      --danger:      #ef4444;
+      --info:        #06b6d4;
+    }
+    [data-theme="light"] {
+      --bg:          #f6f8fa;
+      --surface:     #ffffff;
+      --surface2:    #f0f2f5;
+      --border:      #d0d7de;
+      --text:        #1f2328;
+      --muted:       #656d76;
+      --primary:     #7c3aed;
+      --primary-dim: rgba(124,58,237,.08);
+      --success:     #16a34a;
+      --warning:     #d97706;
+      --danger:      #dc2626;
+      --info:        #0891b2;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    /* ── Header ── */
+    header {
+      position: sticky; top: 0; z-index: 200;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+      height: 54px;
+      display: flex; align-items: center; justify-content: space-between;
+      backdrop-filter: blur(8px);
+    }
+    .brand {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 15px; font-weight: 700; letter-spacing: -.3px;
+    }
+    .brand-icon {
+      width: 30px; height: 30px; border-radius: 8px;
+      background: linear-gradient(135deg, #7c3aed 0%, #06b6d4 100%);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 15px; flex-shrink: 0;
+    }
+    .header-right { display: flex; align-items: center; gap: 12px; }
+    .file-badge {
+      font-size: 12px; color: var(--muted); font-family: monospace;
+      max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .theme-pills {
+      display: flex; background: var(--surface2);
+      border: 1px solid var(--border); border-radius: 20px;
+      padding: 3px; gap: 2px;
+    }
+    .theme-pill {
+      padding: 3px 12px; border-radius: 16px; font-size: 12px;
+      border: none; cursor: pointer; background: none;
+      color: var(--muted); transition: all .15s; font-weight: 500;
+    }
+    .theme-pill.on { background: var(--primary); color: #fff; }
+
+    /* ── Layout ── */
+    main { max-width: 1440px; margin: 0 auto; padding: 28px 24px 60px; }
+
+    /* ── Upload Zone ── */
+    #uploadSection {
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; min-height: calc(100vh - 120px);
+      text-align: center;
+    }
+    .drop-zone {
+      width: 100%; max-width: 560px;
+      border: 2px dashed var(--border);
+      border-radius: 20px;
+      padding: 72px 40px;
+      cursor: pointer;
+      transition: border-color .2s, background .2s;
+      background: var(--surface);
+      position: relative;
+    }
+    .drop-zone:hover, .drop-zone.over {
+      border-color: var(--primary);
+      background: var(--primary-dim);
+    }
+    .drop-icon { font-size: 56px; margin-bottom: 20px; display: block; }
+    .drop-zone h2 { font-size: 22px; font-weight: 700; margin-bottom: 8px; }
+    .drop-zone p { color: var(--muted); margin-bottom: 24px; }
+    .drop-zone .hint { font-size: 12px; color: var(--muted); margin-top: 16px; }
+    .btn-primary {
+      background: var(--primary); color: #fff; border: none;
+      padding: 10px 28px; border-radius: 9px; font-size: 14px;
+      font-weight: 600; cursor: pointer; transition: opacity .15s;
+    }
+    .btn-primary:hover { opacity: .85; }
+    #fileInput { display: none; }
+
+    /* ── Loading ── */
+    #loadingSection {
+      display: none; flex-direction: column; align-items: center;
+      justify-content: center; min-height: calc(100vh - 120px);
+      text-align: center;
+    }
+    .spinner {
+      width: 48px; height: 48px; border-radius: 50%;
+      border: 3px solid var(--border); border-top-color: var(--primary);
+      animation: spin .75s linear infinite; margin: 0 auto 20px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-msg { color: var(--muted); margin-top: 8px; font-size: 13px; }
+    .progress-bar-wrap {
+      width: 280px; height: 4px; background: var(--border);
+      border-radius: 2px; margin: 12px auto 0; overflow: hidden;
+    }
+    .progress-bar { height: 100%; background: var(--primary); width: 0%; transition: width .3s; }
+
+    /* ── Dashboard ── */
+    #dashboard { display: none; }
+
+    /* ── File Info Bar ── */
+    .info-bar {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 14px 20px;
+      display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+      margin-bottom: 24px;
+    }
+    .info-bar .filename { font-family: monospace; font-weight: 700; font-size: 13px; }
+    .info-item { color: var(--muted); font-size: 12px; }
+    .info-item span { color: var(--text); font-weight: 600; }
+    .btn-ghost {
+      margin-left: auto; background: none; border: 1px solid var(--border);
+      color: var(--muted); padding: 4px 12px; border-radius: 7px;
+      cursor: pointer; font-size: 12px; transition: all .15s;
+    }
+    .btn-ghost:hover { border-color: var(--danger); color: var(--danger); }
+
+    /* ── Stats Grid ── */
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 14px; margin-bottom: 24px;
+    }
+    .stat-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 16px 18px;
+    }
+    .stat-label {
+      font-size: 11px; text-transform: uppercase; letter-spacing: .6px;
+      color: var(--muted); margin-bottom: 6px;
+    }
+    .stat-val { font-size: 22px; font-weight: 800; line-height: 1; margin-bottom: 4px; }
+    .stat-sub { font-size: 11px; color: var(--muted); }
+
+    /* ── Charts ── */
+    .charts-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 18px;
+    }
+    @media (min-width: 1100px) {
+      .charts-grid { grid-template-columns: 1fr 1fr; }
+      .chart-full { grid-column: 1 / -1; }
+    }
+    .chart-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 20px 22px;
+    }
+    .chart-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .chart-card-header h3 { font-size: 14px; font-weight: 700; margin-bottom: 2px; }
+    .chart-desc { font-size: 11px; color: var(--muted); margin-bottom: 16px; }
+    .btn-reset-zoom {
+      flex-shrink: 0; background: none; border: 1px solid var(--border);
+      color: var(--muted); padding: 3px 9px; border-radius: 6px;
+      font-size: 11px; cursor: pointer; transition: all .15s; white-space: nowrap;
+      display: none;
+    }
+    .btn-reset-zoom.visible { display: inline-block; }
+    .btn-reset-zoom:hover { border-color: var(--primary); color: var(--primary); }
+    .chart-wrap { position: relative; }
+    .chart-wrap canvas { width: 100% !important; cursor: crosshair; }
+    .zoom-hint { font-size: 10px; color: var(--muted); opacity: .6; margin-top: 6px; text-align: right; }
+
+    /* ── Legend ── */
+    .legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+    .legend-item { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); }
+    .legend-dot { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+    .legend-line {
+      width: 18px; height: 2px; flex-shrink: 0;
+      border-top: 2px dashed currentColor;
+    }
+
+    /* ── Table ── */
+    .table-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; overflow: hidden; margin-top: 18px;
+    }
+    .table-toolbar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 20px; border-bottom: 1px solid var(--border); flex-wrap: wrap; gap: 10px;
+    }
+    .table-toolbar h3 { font-size: 14px; font-weight: 700; }
+    .table-toolbar-right { display: flex; align-items: center; gap: 8px; }
+    select, .filter-select {
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--text); padding: 5px 10px; border-radius: 7px; font-size: 12px;
+      cursor: pointer; appearance: none;
+    }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    thead th {
+      padding: 9px 14px; text-align: left;
+      font-size: 10px; text-transform: uppercase; letter-spacing: .5px;
+      color: var(--muted); background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    tbody tr { border-bottom: 1px solid var(--border); }
+    tbody tr:last-child { border-bottom: none; }
+    tbody td { padding: 9px 14px; font-family: monospace; white-space: nowrap; }
+    tbody tr:hover { background: var(--surface2); }
+    .badge {
+      display: inline-block; padding: 2px 7px; border-radius: 5px;
+      font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
+    }
+    .badge-scavenge { background: rgba(34,197,94,.15); color: var(--success); }
+    .badge-global   { background: rgba(245,158,11,.15); color: var(--warning); }
+    .freed-val { color: var(--success); }
+    .pager {
+      display: flex; align-items: center; gap: 8px;
+      padding: 12px 20px; border-top: 1px solid var(--border); justify-content: flex-end;
+    }
+    .pager-info { font-size: 12px; color: var(--muted); margin-right: 4px; }
+    .pager-btn {
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--text); padding: 4px 12px; border-radius: 7px;
+      font-size: 12px; cursor: pointer; transition: all .15s;
+    }
+    .pager-btn:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
+    .pager-btn:disabled { opacity: .35; cursor: not-allowed; }
+
+    /* ── Utilities ── */
+    .hidden { display: none !important; }
+    .color-success { color: var(--success); }
+    .color-warning { color: var(--warning); }
+    .color-danger  { color: var(--danger); }
+    .color-info    { color: var(--info); }
+
+    /* ── Section heading ── */
+    .section-heading {
+      font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .7px; color: var(--muted); margin: 26px 0 12px;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="brand-icon">♻</div>
+    GC Log Analyzer
+  </div>
+  <div class="header-right">
+    <div class="file-badge" id="headerFilename"></div>
+    <div class="theme-pills">
+      <button class="theme-pill on" id="pillDark"  onclick="setTheme('dark')">Dark</button>
+      <button class="theme-pill"    id="pillLight" onclick="setTheme('light')">Light</button>
+    </div>
+  </div>
+</header>
+
+<main>
+
+  <!-- ── Upload ── -->
+  <div id="uploadSection">
+    <div class="drop-zone" id="dropZone">
+      <span class="drop-icon">📊</span>
+      <h2>Drop your GC log here</h2>
+      <p>IBM OpenJ9 / Semeru verbose GC XML format</p>
+      <button class="btn-primary" onclick="event.stopPropagation(); fileInput.click()">Choose File</button>
+      <input type="file" id="fileInput" accept=".log,.xml,.txt,.gz">
+      <p class="hint">File is parsed entirely in your browser — nothing is uploaded.</p>
+    </div>
+  </div>
+
+  <!-- ── Loading ── -->
+  <div id="loadingSection">
+    <div class="spinner"></div>
+    <div style="font-size:16px; font-weight:600;">Parsing GC log…</div>
+    <div class="loading-msg" id="loadingMsg">Reading file…</div>
+    <div class="progress-bar-wrap"><div class="progress-bar" id="progressBar"></div></div>
+  </div>
+
+  <!-- ── Dashboard ── -->
+  <div id="dashboard">
+
+    <!-- Info bar -->
+    <div class="info-bar">
+      <div class="filename" id="infoFilename"></div>
+      <div class="info-item">Events: <span id="infoEvents"></span></div>
+      <div class="info-item">Elapsed: <span id="infoElapsed"></span></div>
+      <div class="info-item">GC Policy: <span id="infoPolicy"></span></div>
+      <div class="info-item">Max Heap: <span id="infoMaxHeap"></span></div>
+      <div class="info-item">JVM: <span id="infoJvm"></span></div>
+      <button class="btn-ghost" onclick="resetUI()">✕ Clear</button>
+    </div>
+
+    <!-- Stats -->
+    <div class="section-heading">Summary</div>
+    <div class="stats-row" id="statsRow"></div>
+
+    <!-- Charts -->
+    <div class="section-heading">Memory</div>
+    <div class="charts-grid">
+
+      <div class="chart-card chart-full">
+        <div class="chart-card-header">
+          <div><h3>Total Heap Usage Over Time</h3></div>
+          <button class="btn-reset-zoom" id="resetHeap" onclick="resetZoom('chartHeap')">↺ Reset zoom</button>
+        </div>
+        <div class="chart-desc">
+          Used memory before each GC (shows fill) vs after each GC (shows live set) — plus heap capacity. Values in MB.
+          Scroll to zoom · drag to pan · double-click to reset.
+        </div>
+        <div class="chart-wrap" style="height:260px">
+          <canvas id="chartHeap"></canvas>
+        </div>
+        <div class="legend">
+          <div class="legend-item"><div class="legend-dot" style="background:#f472b6"></div> Before GC (heap fill)</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#a78bfa"></div> After GC (live set)</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#475569; opacity:.6"></div> Heap Capacity</div>
+        </div>
+      </div>
+
+      <div class="chart-card chart-full">
+        <div class="chart-card-header">
+          <div><h3>Heap Region Breakdown (after GC)</h3></div>
+          <button class="btn-reset-zoom" id="resetRegion" onclick="resetZoom('chartRegion')">↺ Reset zoom</button>
+        </div>
+        <div class="chart-desc">
+          Used memory stacked by region — Nursery Allocate · Nursery Survivor · Tenure SOA · Tenure LOA. Values in MB.
+          Scroll to zoom · drag to pan · double-click to reset.
+        </div>
+        <div class="chart-wrap" style="height:260px">
+          <canvas id="chartRegion"></canvas>
+        </div>
+        <div class="legend">
+          <div class="legend-item"><div class="legend-dot" style="background:#6366f1"></div> Nursery Allocate</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#a855f7"></div> Nursery Survivor</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#06b6d4"></div> Tenure SOA</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#0ea5e9"></div> Tenure LOA</div>
+        </div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-card-header">
+          <div><h3>Nursery Region Sizes Over Time</h3></div>
+          <button class="btn-reset-zoom" id="resetNursery" onclick="resetZoom('chartNursery')">↺ Reset zoom</button>
+        </div>
+        <div class="chart-desc">Nursery total capacity and allocate / survivor split (MB). Shows heap resizes. Scroll to zoom.</div>
+        <div class="chart-wrap" style="height:240px">
+          <canvas id="chartNursery"></canvas>
+        </div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-card-header">
+          <div><h3>Tenure Region Sizes Over Time</h3></div>
+          <button class="btn-reset-zoom" id="resetTenure" onclick="resetZoom('chartTenure')">↺ Reset zoom</button>
+        </div>
+        <div class="chart-desc">Tenure total capacity and SOA / LOA used (MB). Rises between major GCs. Scroll to zoom.</div>
+        <div class="chart-wrap" style="height:240px">
+          <canvas id="chartTenure"></canvas>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- GC Performance charts -->
+    <div class="section-heading">GC Performance</div>
+    <div class="charts-grid">
+
+      <div class="chart-card chart-full">
+        <div class="chart-card-header">
+          <div><h3>Pause Duration Over Time</h3></div>
+          <button class="btn-reset-zoom" id="resetPause" onclick="resetZoom('chartPause')">↺ Reset zoom</button>
+        </div>
+        <div class="chart-desc">
+          Each dot = one GC pause. Green = scavenge (minor). Amber = global (major). Y-axis in ms.
+          Scroll to zoom · drag to pan · double-click to reset.
+        </div>
+        <div class="chart-wrap" style="height:220px">
+          <canvas id="chartPause"></canvas>
+        </div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-card-header">
+          <div><h3>Pause Duration Distribution</h3></div>
+          <button class="btn-reset-zoom" id="resetHisto" onclick="resetZoom('chartHisto')">↺ Reset zoom</button>
+        </div>
+        <div class="chart-desc">Histogram of pause times — scavenge (green) and global (amber). Scroll to zoom.</div>
+        <div class="chart-wrap" style="height:220px">
+          <canvas id="chartHisto"></canvas>
+        </div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-card-header">
+          <div><h3>Memory Freed per GC Event</h3></div>
+          <button class="btn-reset-zoom" id="resetFreed" onclick="resetZoom('chartFreed')">↺ Reset zoom</button>
+        </div>
+        <div class="chart-desc">Heap memory reclaimed (MB) by each collection event. Scroll to zoom.</div>
+        <div class="chart-wrap" style="height:220px">
+          <canvas id="chartFreed"></canvas>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Events table -->
+    <div class="table-card">
+      <div class="table-toolbar">
+        <h3>GC Events</h3>
+        <div class="table-toolbar-right">
+          <select id="typeFilter" onchange="applyFilter()">
+            <option value="">All types</option>
+            <option value="scavenge">Scavenge only</option>
+            <option value="global">Global only</option>
+          </select>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Timestamp</th>
+              <th>Type</th>
+              <th>Duration (ms)</th>
+              <th>Stall (ms)</th>
+              <th>Nursery Before (MB)</th>
+              <th>Tenure Before (MB)</th>
+              <th>Heap After (MB)</th>
+              <th>Freed (MB)</th>
+              <th>Capacity (MB)</th>
+            </tr>
+          </thead>
+          <tbody id="eventsBody"></tbody>
+        </table>
+      </div>
+      <div class="pager">
+        <span class="pager-info" id="pagerInfo"></span>
+        <button class="pager-btn" id="btnPrev" onclick="gotoPage(currentPage - 1)">← Prev</button>
+        <button class="pager-btn" id="btnNext" onclick="gotoPage(currentPage + 1)">Next →</button>
+      </div>
+    </div>
+
+  </div><!-- /dashboard -->
+</main>
+
+<script>
+// ─────────────────────────────────────────────
+// State  (declared first — used by setTheme)
+// ─────────────────────────────────────────────
+let gcData = null;
+let filteredEvents = [];
+let currentPage = 0;
+const PAGE = 50;
+const charts = {};
+
+// ─────────────────────────────────────────────
+// Theme
+// ─────────────────────────────────────────────
+function setTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+  document.getElementById('pillDark').classList.toggle('on', t === 'dark');
+  document.getElementById('pillLight').classList.toggle('on', t === 'light');
+  if (gcData) rebuildCharts();
+}
+
+if (window.matchMedia('(prefers-color-scheme: light)').matches) setTheme('light');
+
+// ─────────────────────────────────────────────
+// File handling
+// ─────────────────────────────────────────────
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault(); dropZone.classList.remove('over');
+  if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+});
+dropZone.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', e => { if (e.target.files[0]) loadFile(e.target.files[0]); });
+
+function loadFile(file) {
+  showSection('loading');
+  setMsg('Reading file…', 10);
+
+  const reader = new FileReader();
+  reader.onload = e => {
+    setMsg('Parsing GC events…', 40);
+    setTimeout(() => {
+      try {
+        gcData = parseGCLog(e.target.result, file.name);
+        setMsg('Building charts…', 80);
+        setTimeout(() => {
+          try {
+            renderDashboard();
+            showSection('dashboard');
+          } catch(err2) {
+            showError('Render error: ' + err2.message + '\n' + err2.stack);
+          }
+        }, 50);
+      } catch (err) {
+        showError('Parse error: ' + err.message + '\n' + err.stack);
+      }
+    }, 30);
+  };
+  reader.readAsText(file);
+}
+
+function showError(msg) {
+  console.error(msg);
+  document.getElementById('loadingMsg').textContent = 'Error — see console';
+  document.getElementById('loadingMsg').style.color = 'var(--danger)';
+}
+
+function setMsg(msg, pct) {
+  document.getElementById('loadingMsg').textContent = msg;
+  document.getElementById('progressBar').style.width = pct + '%';
+}
+
+function showSection(name) {
+  document.getElementById('uploadSection').style.display  = name === 'upload'   ? 'flex' : 'none';
+  document.getElementById('loadingSection').style.display = name === 'loading'  ? 'flex' : 'none';
+  document.getElementById('dashboard').style.display      = name === 'dashboard'? 'block' : 'none';
+}
+
+function resetUI() {
+  gcData = null; filteredEvents = [];
+  Object.values(charts).forEach(c => c?.destroy());
+  Object.keys(charts).forEach(k => delete charts[k]);
+  fileInput.value = '';
+  document.getElementById('headerFilename').textContent = '';
+  showSection('upload');
+}
+
+// ─────────────────────────────────────────────
+// Parser — indexOf-only, no regex, handles 15 MB+ files fast
+// ─────────────────────────────────────────────
+
+// Extract named XML attribute value from a raw string slice.
+function xa(s, name) {
+  const m = name + '="';
+  const i = s.indexOf(m);
+  if (i === -1) return null;
+  const j = s.indexOf('"', i + m.length);
+  return j === -1 ? null : s.slice(i + m.length, j);
+}
+
+// Return the attributes string of the first self-closing <mem type="TYPE" .../>
+function scMemAttrs(body, type) {
+  const needle = '<mem type="' + type + '"';
+  const i = body.indexOf(needle);
+  if (i === -1) return '';
+  const j = body.indexOf('/>', i);
+  return j === -1 ? '' : body.slice(i + needle.length, j);
+}
+
+// Parse a mem-info block (a small ~400-char string) into a memory struct.
+function parseMem(block) {
+  const mi = block.indexOf('<mem-info');
+  if (mi === -1) return null;
+  const miTE = block.indexOf('>', mi) + 1;
+  const miCL = block.indexOf('</mem-info>', miTE);
+  const miTag  = block.slice(mi, miTE);
+  const miBody = block.slice(miTE, miCL !== -1 ? miCL : block.length);
+
+  const heapFree  = +xa(miTag, 'free')  || 0;
+  const heapTotal = +xa(miTag, 'total') || 0;
+
+  // ── Nursery (block element: <mem type="nursery">…</mem>)
+  const NUR = '<mem type="nursery"';
+  const ni   = miBody.indexOf(NUR);
+  const nTE  = ni >= 0 ? miBody.indexOf('>', ni) + 1 : 0;
+  const nCL  = ni >= 0 ? miBody.indexOf('</mem>', nTE) : -1;
+  const nTag  = ni >= 0 ? miBody.slice(ni, nTE) : '';
+  const nBody = (ni >= 0 && nCL >= 0) ? miBody.slice(nTE, nCL) : '';
+
+  // ── Tenure (block element after nursery closes)
+  const TEN  = '<mem type="tenure"';
+  const tenStart = nCL >= 0 ? nCL + 6 : 0;
+  const ti   = miBody.indexOf(TEN, tenStart);
+  const tTE  = ti >= 0 ? miBody.indexOf('>', ti) + 1 : 0;
+  const tCL  = ti >= 0 ? miBody.indexOf('</mem>', tTE) : -1;
+  const tTag  = ti >= 0 ? miBody.slice(ti, tTE) : '';
+  const tBody = (ti >= 0 && tCL >= 0) ? miBody.slice(tTE, tCL) : '';
+
+  const g = (s, a) => +xa(s, a) || 0;
+  const nF=g(nTag,'free'), nT=g(nTag,'total');
+  const tF=g(tTag,'free'), tT=g(tTag,'total');
+  const aS=scMemAttrs(nBody,'allocate'), sS=scMemAttrs(nBody,'survivor');
+  const soS=scMemAttrs(tBody,'soa'),    loS=scMemAttrs(tBody,'loa');
+  const aF=g(aS,'free'),  aTo=g(aS,'total');
+  const svF=g(sS,'free'), svTo=g(sS,'total');
+  const soF=g(soS,'free'),soTo=g(soS,'total');
+  const loF=g(loS,'free'),loTo=g(loS,'total');
+
+  return {
+    heap:    { free: heapFree, total: heapTotal, used: heapTotal - heapFree },
+    nursery: { free: nF, total: nT, used: nT - nF,
+      allocate: { free: aF,  total: aTo,  used: aTo  - aF  },
+      survivor: { free: svF, total: svTo, used: svTo - svF } },
+    tenure:  { free: tF, total: tT, used: tT - tF,
+      soa: { free: soF, total: soTo, used: soTo - soF },
+      loa: { free: loF, total: loTo, used: loTo - loF } }
+  };
+}
+
+// Iterate all <tagName ...>…</tagName> top-level blocks using pure indexOf.
+function* iterBlocks(text, tagName) {
+  const OPEN  = '<' + tagName + ' ';
+  const CLOSE = '</' + tagName + '>';
+  let pos = 0;
+  while (true) {
+    const s = text.indexOf(OPEN, pos);
+    if (s === -1) break;
+    const tagEnd    = text.indexOf('>', s) + 1;
+    if (tagEnd === 0) break;
+    const closePos  = text.indexOf(CLOSE, tagEnd);
+    if (closePos === -1) break;
+    yield { tag: text.slice(s, tagEnd), body: text.slice(tagEnd, closePos) };
+    pos = closePos + CLOSE.length;
+  }
+}
+
+function parseGCLog(text, fileName) {
+  // ── Metadata from the first 3 KB ──
+  const head = text.slice(0, 3000);
+  const gcPolicy   = head.match(/name="gcPolicy"\s+value="([^"]*)"/)?.[1]     || 'unknown';
+  const maxHeapRaw = head.match(/name="maxHeapSize"\s+value="([^"]*)"/)?.[1]  || '0';
+  const maxHeap    = parseInt(maxHeapRaw, 16) || parseInt(maxHeapRaw, 10) || 0;
+  const jvmOs      = head.match(/name="os"\s+value="([^"]*)"/)?.[1]           || '';
+  const arch       = head.match(/name="architecture"\s+value="([^"]*)"/)?.[1] || '';
+
+  // ── gc-start map keyed by contextid ──
+  const startMap = {};
+  for (const { tag, body } of iterBlocks(text, 'gc-start')) {
+    const cid = xa(tag, 'contextid');
+    if (cid) startMap[cid] = { ts: new Date(xa(tag, 'timestamp') || ''), mem: parseMem(body) };
+  }
+
+  // ── gc-end events ──
+  const events = [];
+  for (const { tag, body } of iterBlocks(text, 'gc-end')) {
+    const cid   = xa(tag, 'contextid');
+    const type  = xa(tag, 'type')        || 'unknown';
+    const ts    = new Date(xa(tag, 'timestamp')  || '');
+    const dur   = parseFloat(xa(tag, 'durationms')  || '0') || 0;
+    const stall = parseFloat(xa(tag, 'stalltimems') || '0') || 0;
+    const user  = parseFloat(xa(tag, 'usertimems')  || '0') || 0;
+    const s     = startMap[cid];
+    events.push({ ts, type, dur, stall, user,
+      before: s?.mem || null, beforeTs: s?.ts || ts,
+      after:  parseMem(body) });
+  }
+
+  events.sort((a, b) => a.ts - b.ts);
+  return { events, gcPolicy, maxHeap, jvmOs, arch, fileName };
+}
+
+// ─────────────────────────────────────────────
+// Dashboard render
+// ─────────────────────────────────────────────
+const MB = 1024 * 1024;
+const toMB = b => b / MB;
+const fmtMB  = b => (b / MB).toFixed(1);
+const fmtMs  = ms => ms < 1 ? ms.toFixed(3) : ms.toFixed(2);
+const fmtDur = ms => ms < 1000 ? ms.toFixed(0) + 'ms' : ms < 60000 ? (ms/1000).toFixed(1) + 's' : Math.floor(ms/60000) + 'm ' + Math.floor((ms%60000)/1000) + 's';
+
+function renderDashboard() {
+  const { events, gcPolicy, maxHeap, jvmOs, arch, fileName } = gcData;
+
+  // Header / info bar
+  document.getElementById('headerFilename').textContent = fileName;
+  document.getElementById('infoFilename').textContent   = fileName;
+  document.getElementById('infoPolicy').textContent     = gcPolicy;
+  document.getElementById('infoMaxHeap').textContent    = maxHeap ? fmtMB(maxHeap) + ' MB' : '—';
+  document.getElementById('infoJvm').textContent        = [jvmOs, arch].filter(Boolean).join(' · ') || '—';
+  document.getElementById('infoEvents').textContent     = events.length.toLocaleString();
+
+  if (events.length > 1) {
+    const dur = events[events.length-1].ts - events[0].ts;
+    document.getElementById('infoElapsed').textContent = fmtDur(dur);
+  } else {
+    document.getElementById('infoElapsed').textContent = '—';
+  }
+
+  renderStats(events, maxHeap);
+  filteredEvents = [...events];
+  currentPage = 0;
+  rebuildCharts();
+  renderTable();
+}
+
+function renderStats(events, maxHeap) {
+  const scav   = events.filter(e => e.type === 'scavenge');
+  const global = events.filter(e => e.type === 'global');
+
+  const totalPause  = events.reduce((s, e) => s + e.dur, 0);
+  const avgPause    = totalPause / (events.length || 1);
+  const maxPause    = Math.max(0, ...events.map(e => e.dur));
+  const maxPauseGlo = global.length ? Math.max(...global.map(e => e.dur)) : 0;
+
+  const elapsed    = events.length > 1 ? (events[events.length-1].ts - events[0].ts) : 0;
+  const overhead   = elapsed > 0 ? (totalPause / elapsed * 100) : 0;
+
+  const peakHeap   = Math.max(0, ...events.map(e => e.after?.heap.used || 0));
+  const peakTenure = Math.max(0, ...events.map(e => e.after?.tenure?.used || 0));
+
+  const avgScavDur = scav.length ? scav.reduce((s,e) => s+e.dur, 0) / scav.length : 0;
+  const avgGloDur  = global.length ? global.reduce((s,e) => s+e.dur, 0) / global.length : 0;
+
+  const stats = [
+    { label: 'Total GC Events', val: events.length.toLocaleString(),
+      sub: `${scav.length.toLocaleString()} scavenge · ${global.length.toLocaleString()} global` },
+    { label: 'Avg Pause', val: fmtMs(avgPause) + ' ms',
+      sub: `Scavenge avg: ${fmtMs(avgScavDur)} ms` },
+    { label: 'Max Pause (any)', val: fmtMs(maxPause) + ' ms',
+      sub: `Max global: ${fmtMs(maxPauseGlo)} ms` },
+    { label: 'Avg Global Pause', val: fmtMs(avgGloDur) + ' ms',
+      sub: `Global avg` },
+    { label: 'Total Pause Time', val: fmtDur(totalPause),
+      sub: 'Cumulative STW' },
+    { label: 'GC Overhead', val: overhead.toFixed(2) + '%',
+      sub: 'pause ÷ elapsed time' },
+    { label: 'Peak Heap Used', val: fmtMB(peakHeap) + ' MB',
+      sub: maxHeap ? `of ${fmtMB(maxHeap)} MB max` : '' },
+    { label: 'Peak Tenure Used', val: fmtMB(peakTenure) + ' MB',
+      sub: 'SOA + LOA combined' },
+  ];
+
+  document.getElementById('statsRow').innerHTML = stats.map(s => `
+    <div class="stat-card">
+      <div class="stat-label">${s.label}</div>
+      <div class="stat-val">${s.val}</div>
+      ${s.sub ? `<div class="stat-sub">${s.sub}</div>` : ''}
+    </div>`).join('');
+}
+
+// ─────────────────────────────────────────────
+// Charts
+// ─────────────────────────────────────────────
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function themeDefaults() {
+  return {
+    grid:  cssVar('--border'),
+    text:  cssVar('--muted'),
+    bg:    cssVar('--surface'),
+  };
+}
+
+function downsample(arr, max) {
+  if (arr.length <= max) return arr;
+  const step = arr.length / max;
+  const result = [];
+  for (let i = 0; i < max; i++) result.push(arr[Math.floor(i * step)]);
+  return result;
+}
+
+// Map chart canvas id → reset-button element id
+const RESET_BTN = {
+  chartHeap: 'resetHeap', chartRegion: 'resetRegion',
+  chartNursery: 'resetNursery', chartTenure: 'resetTenure',
+  chartPause: 'resetPause', chartHisto: 'resetHisto', chartFreed: 'resetFreed',
+};
+
+function resetZoom(chartId) {
+  charts[chartId]?.resetZoom();
+  document.getElementById(RESET_BTN[chartId])?.classList.remove('visible');
+}
+
+function zoomPlugin() {
+  return {
+    zoom: {
+      wheel:  { enabled: true, speed: 0.1 },
+      pinch:  { enabled: true },
+      mode:   'xy',
+      onZoom: ({ chart }) => {
+        const btn = RESET_BTN[chart.canvas.id];
+        if (btn) document.getElementById(btn)?.classList.add('visible');
+      }
+    },
+    pan: {
+      enabled: true,
+      mode:    'xy',
+      onPan:   ({ chart }) => {
+        const btn = RESET_BTN[chart.canvas.id];
+        if (btn) document.getElementById(btn)?.classList.add('visible');
+      }
+    },
+  };
+}
+
+function baseOptions(height) {
+  const t = themeDefaults();
+  return {
+    responsive: true, maintainAspectRatio: false,
+    animation: { duration: 300 },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: cssVar('--surface2'),
+        borderColor: cssVar('--border'),
+        borderWidth: 1,
+        titleColor: cssVar('--text'),
+        bodyColor: cssVar('--muted'),
+        padding: 10,
+      },
+      zoom: zoomPlugin(),
+    },
+    scales: {
+      x: {
+        type: 'time',
+        time: { tooltipFormat: 'HH:mm:ss.SSS', displayFormats: { second: 'HH:mm:ss', minute: 'HH:mm', millisecond: 'HH:mm:ss.SSS' } },
+        grid: { color: t.grid },
+        ticks: { color: t.text, maxTicksLimit: 8 }
+      },
+      y: {
+        grid: { color: t.grid },
+        ticks: { color: t.text }
+      }
+    }
+  };
+}
+
+function makeChart(id, cfg) {
+  const old = charts[id];
+  if (old) old.destroy();
+  // Hide reset button when rebuilding
+  document.getElementById(RESET_BTN[id])?.classList.remove('visible');
+  const canvas = document.getElementById(id);
+  canvas.style.height = '100%';
+  const ctx = canvas.getContext('2d');
+  // Double-click resets zoom
+  canvas.ondblclick = () => resetZoom(id);
+  charts[id] = new Chart(ctx, cfg);
+  return charts[id];
+}
+
+function rebuildCharts() {
+  const { events } = gcData;
+  if (!events.length) return;
+
+  buildHeapChart(events);
+  buildRegionChart(events);
+  buildNurseryChart(events);
+  buildTenureChart(events);
+  buildPauseChart(events);
+  buildHistoChart(events);
+  buildFreedChart(events);
+}
+
+// ── Heap usage (before + after + capacity)
+function buildHeapChart(events) {
+  const MAX = 600;
+  const src = downsample(events, MAX);
+
+  const beforePts  = src.filter(e => e.before).map(e => ({ x: e.beforeTs, y: toMB(e.before.heap.used) }));
+  const afterPts   = src.map(e => ({ x: e.ts, y: toMB(e.after?.heap.used || 0) }));
+  const capPts     = src.map(e => ({ x: e.ts, y: toMB(e.after?.heap.total || 0) }));
+
+  makeChart('chartHeap', {
+    type: 'line',
+    data: {
+      datasets: [
+        { label: 'Before GC', data: beforePts, borderColor: '#f472b6', borderWidth: 1.2,
+          pointRadius: 0, fill: false, tension: 0, borderDash: [4,3] },
+        { label: 'After GC',  data: afterPts,  borderColor: '#a78bfa', borderWidth: 1.5,
+          pointRadius: 0, fill: false, tension: 0 },
+        { label: 'Capacity',  data: capPts,    borderColor: '#475569', borderWidth: 1,
+          pointRadius: 0, fill: false, tension: 0, borderDash: [6,4], borderOpacity: .4 }
+      ]
+    },
+    options: { ...baseOptions(260), scales: { ...baseOptions(260).scales, y: { ...baseOptions(260).scales.y, title: { display: true, text: 'MB', color: cssVar('--muted') } } } }
+  });
+}
+
+// ── Region stacked area chart
+function buildRegionChart(events) {
+  const MAX = 500;
+  const src = downsample(events, MAX);
+
+  const make = (key1, key2, color, label) => ({
+    label, data: src.map(e => ({ x: e.ts, y: toMB(e.after?.[key1]?.[key2]?.used || 0) })),
+    borderColor: color, backgroundColor: color + '33',
+    borderWidth: 1.2, pointRadius: 0, fill: true, tension: 0
+  });
+
+  makeChart('chartRegion', {
+    type: 'line',
+    data: {
+      datasets: [
+        make('nursery','allocate','#6366f1','Nur. Allocate'),
+        make('nursery','survivor','#a855f7','Nur. Survivor'),
+        make('tenure','soa',      '#06b6d4','Ten. SOA'),
+        make('tenure','loa',      '#0ea5e9','Ten. LOA'),
+      ]
+    },
+    options: {
+      ...baseOptions(260),
+      scales: {
+        ...baseOptions(260).scales,
+        y: { ...baseOptions(260).scales.y, stacked: true,
+             title: { display: true, text: 'MB', color: cssVar('--muted') } }
+      }
+    }
+  });
+}
+
+// ── Nursery total + allocate + survivor
+function buildNurseryChart(events) {
+  const MAX = 500;
+  const src = downsample(events, MAX);
+
+  makeChart('chartNursery', {
+    type: 'line',
+    data: {
+      datasets: [
+        { label: 'Nursery Total', data: src.map(e => ({ x: e.ts, y: toMB(e.after?.nursery.total || 0) })),
+          borderColor: '#94a3b8', borderWidth: 1, borderDash: [5,3], pointRadius: 0, fill: false, tension: 0 },
+        { label: 'Allocate Used', data: src.map(e => ({ x: e.ts, y: toMB(e.after?.nursery.allocate.used || 0) })),
+          borderColor: '#6366f1', backgroundColor: '#6366f133', borderWidth: 1.4, pointRadius: 0, fill: true, tension: 0 },
+        { label: 'Survivor Used', data: src.map(e => ({ x: e.ts, y: toMB(e.after?.nursery.survivor.used || 0) })),
+          borderColor: '#a855f7', backgroundColor: '#a855f733', borderWidth: 1.4, pointRadius: 0, fill: true, tension: 0 },
+      ]
+    },
+    options: { ...baseOptions(240), scales: { ...baseOptions(240).scales, y: { ...baseOptions(240).scales.y, title: { display: true, text: 'MB', color: cssVar('--muted') } } } }
+  });
+}
+
+// ── Tenure total + soa + loa
+function buildTenureChart(events) {
+  const MAX = 500;
+  const src = downsample(events, MAX);
+
+  makeChart('chartTenure', {
+    type: 'line',
+    data: {
+      datasets: [
+        { label: 'Tenure Total', data: src.map(e => ({ x: e.ts, y: toMB(e.after?.tenure.total || 0) })),
+          borderColor: '#94a3b8', borderWidth: 1, borderDash: [5,3], pointRadius: 0, fill: false, tension: 0 },
+        { label: 'SOA Used', data: src.map(e => ({ x: e.ts, y: toMB(e.after?.tenure.soa.used || 0) })),
+          borderColor: '#06b6d4', backgroundColor: '#06b6d433', borderWidth: 1.4, pointRadius: 0, fill: true, tension: 0 },
+        { label: 'LOA Used', data: src.map(e => ({ x: e.ts, y: toMB(e.after?.tenure.loa.used || 0) })),
+          borderColor: '#0ea5e9', backgroundColor: '#0ea5e933', borderWidth: 1.4, pointRadius: 0, fill: true, tension: 0 },
+      ]
+    },
+    options: { ...baseOptions(240), scales: { ...baseOptions(240).scales, y: { ...baseOptions(240).scales.y, title: { display: true, text: 'MB', color: cssVar('--muted') } } } }
+  });
+}
+
+// ── Pause scatter (colored by type)
+function buildPauseChart(events) {
+  const scav = events.filter(e => e.type === 'scavenge');
+  const glob = events.filter(e => e.type !== 'scavenge');
+
+  const pt = e => ({ x: e.ts, y: e.dur });
+  const MAX = 800;
+
+  makeChart('chartPause', {
+    type: 'scatter',
+    data: {
+      datasets: [
+        { label: 'Scavenge', data: downsample(scav, MAX).map(pt),
+          backgroundColor: '#22c55ecc', pointRadius: 2.5, pointHoverRadius: 5 },
+        { label: 'Global',   data: downsample(glob, MAX).map(pt),
+          backgroundColor: '#f59e0bcc', pointRadius: 4, pointHoverRadius: 6 },
+      ]
+    },
+    options: {
+      ...baseOptions(220),
+      plugins: {
+        ...baseOptions(220).plugins,
+        legend: { display: true, position: 'top',
+          labels: { color: cssVar('--text'), boxWidth: 10, padding: 16, font: { size: 11 } } }
+      },
+      scales: {
+        ...baseOptions(220).scales,
+        y: { ...baseOptions(220).scales.y, title: { display: true, text: 'ms', color: cssVar('--muted') } }
+      }
+    }
+  });
+}
+
+// ── Pause histogram
+function buildHistoChart(events) {
+  const buckets = [0, 0.5, 1, 2, 5, 10, 20, 50, 100, Infinity];
+  const labels  = ['<0.5','0.5-1','1-2','2-5','5-10','10-20','20-50','50-100','>100'];
+
+  const countBuckets = (evts) => {
+    const c = Array(labels.length).fill(0);
+    evts.forEach(e => {
+      for (let i = 0; i < buckets.length - 1; i++) {
+        if (e.dur >= buckets[i] && e.dur < buckets[i+1]) { c[i]++; break; }
+      }
+    });
+    return c;
+  };
+
+  const scav = countBuckets(events.filter(e => e.type === 'scavenge'));
+  const glob = countBuckets(events.filter(e => e.type !== 'scavenge'));
+
+  makeChart('chartHisto', {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Scavenge', data: scav, backgroundColor: '#22c55e99', borderColor: '#22c55e', borderWidth: 1 },
+        { label: 'Global',   data: glob, backgroundColor: '#f59e0b99', borderColor: '#f59e0b', borderWidth: 1 },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      animation: { duration: 300 },
+      plugins: {
+        legend: { display: true, position: 'top',
+          labels: { color: cssVar('--text'), boxWidth: 10, padding: 14, font: { size: 11 } } },
+        tooltip: { backgroundColor: cssVar('--surface2'), borderColor: cssVar('--border'), borderWidth: 1,
+                   titleColor: cssVar('--text'), bodyColor: cssVar('--muted'), padding: 10 },
+        zoom: zoomPlugin(),
+      },
+      scales: {
+        x: { grid: { color: cssVar('--border') }, ticks: { color: cssVar('--muted') },
+             title: { display: true, text: 'Pause (ms)', color: cssVar('--muted') } },
+        y: { grid: { color: cssVar('--border') }, ticks: { color: cssVar('--muted') },
+             title: { display: true, text: 'Count', color: cssVar('--muted') } }
+      }
+    }
+  });
+}
+
+// ── Memory freed per event
+function buildFreedChart(events) {
+  const MAX = 600;
+  const src = downsample(events, MAX);
+
+  const scavData = src.map(e => ({
+    x: e.ts,
+    y: e.type === 'scavenge' && e.before ? toMB(Math.max(0, e.before.heap.used - (e.after?.heap.used || 0))) : null
+  })).filter(p => p.y !== null);
+  const globData = src.map(e => ({
+    x: e.ts,
+    y: e.type === 'global' && e.before ? toMB(Math.max(0, e.before.heap.used - (e.after?.heap.used || 0))) : null
+  })).filter(p => p.y !== null);
+
+  makeChart('chartFreed', {
+    type: 'scatter',
+    data: {
+      datasets: [
+        { label: 'Scavenge', data: scavData, backgroundColor: '#22c55e99', pointRadius: 2.5, pointHoverRadius: 5 },
+        { label: 'Global',   data: globData, backgroundColor: '#f59e0bcc', pointRadius: 4,   pointHoverRadius: 7 },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: { duration: 300 },
+      plugins: {
+        legend: { display: true, position: 'top',
+          labels: { color: cssVar('--text'), boxWidth: 10, padding: 14, font: { size: 11 } } },
+        tooltip: { backgroundColor: cssVar('--surface2'), borderColor: cssVar('--border'), borderWidth: 1,
+                   titleColor: cssVar('--text'), bodyColor: cssVar('--muted'), padding: 10 },
+        zoom: zoomPlugin(),
+      },
+      scales: {
+        x: { type: 'time', time: { tooltipFormat: 'HH:mm:ss.SSS', displayFormats: { second: 'HH:mm:ss', millisecond: 'HH:mm:ss.SSS' } },
+             grid: { color: cssVar('--border') }, ticks: { color: cssVar('--muted'), maxTicksLimit: 8 } },
+        y: { grid: { color: cssVar('--border') }, ticks: { color: cssVar('--muted') },
+             title: { display: true, text: 'MB freed', color: cssVar('--muted') } }
+      }
+    }
+  });
+}
+
+// ─────────────────────────────────────────────
+// Table
+// ─────────────────────────────────────────────
+function applyFilter() {
+  const val = document.getElementById('typeFilter').value;
+  filteredEvents = val ? gcData.events.filter(e => e.type === val) : [...gcData.events];
+  currentPage = 0;
+  renderTable();
+}
+
+function gotoPage(p) {
+  const pages = Math.ceil(filteredEvents.length / PAGE);
+  currentPage = Math.max(0, Math.min(p, pages - 1));
+  renderTable();
+}
+
+function renderTable() {
+  const total = filteredEvents.length;
+  const pages = Math.ceil(total / PAGE);
+  const start = currentPage * PAGE;
+  const slice = filteredEvents.slice(start, start + PAGE);
+
+  document.getElementById('pagerInfo').textContent =
+    `${(start+1).toLocaleString()}–${Math.min(start+PAGE, total).toLocaleString()} of ${total.toLocaleString()}`;
+  document.getElementById('btnPrev').disabled = currentPage === 0;
+  document.getElementById('btnNext').disabled = currentPage >= pages - 1;
+
+  document.getElementById('eventsBody').innerHTML = slice.map((e, i) => {
+    const heapAfter = e.after?.heap.used || 0;
+    const heapBefore = e.before?.heap.used || 0;
+    const freed = Math.max(0, heapBefore - heapAfter);
+    const nurBefore = e.before ? e.before.nursery.used : null;
+    const tenBefore = e.before ? e.before.tenure.used  : null;
+
+    return `<tr>
+      <td style="color:var(--muted)">${(start+i+1).toLocaleString()}</td>
+      <td>${e.ts.toISOString().replace('T',' ').replace('Z','')}</td>
+      <td><span class="badge badge-${e.type}">${e.type}</span></td>
+      <td class="${e.dur > 20 ? 'color-warning' : e.dur > 100 ? 'color-danger' : ''}">${fmtMs(e.dur)}</td>
+      <td>${fmtMs(e.stall)}</td>
+      <td>${nurBefore !== null ? fmtMB(nurBefore) : '—'}</td>
+      <td>${tenBefore !== null ? fmtMB(tenBefore) : '—'}</td>
+      <td>${fmtMB(heapAfter)}</td>
+      <td class="freed-val">${freed > 0 ? fmtMB(freed) : '—'}</td>
+      <td style="color:var(--muted)">${fmtMB(e.after?.heap.total || 0)}</td>
+    </tr>`;
+  }).join('');
+}
+</script>
+</body>
+</html>
