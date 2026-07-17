@@ -15,3 +15,5 @@ Others are Python apps/ scripts. Run them locally on your system.
 | 2026-05-29 | [Influx Analyzer](/influxanalyzer/)                         | Analyze the structure and size of your Influx database v1.8. |
 
 
+# Github
+The Github Repo of this all is here: https://github.com/easternnl/tools.eastern.nl 
