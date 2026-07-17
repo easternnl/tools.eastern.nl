@@ -4,10 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Java GC Log Analyzer</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
   <style>
     :root {
       --bg:          #0d1117;
@@ -193,17 +190,7 @@
     .chart-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
     .chart-card-header h3 { font-size: 14px; font-weight: 700; margin-bottom: 2px; }
     .chart-desc { font-size: 11px; color: var(--muted); margin-bottom: 16px; }
-    .btn-reset-zoom {
-      flex-shrink: 0; background: none; border: 1px solid var(--border);
-      color: var(--muted); padding: 3px 9px; border-radius: 6px;
-      font-size: 11px; cursor: pointer; transition: all .15s; white-space: nowrap;
-      display: none;
-    }
-    .btn-reset-zoom.visible { display: inline-block; }
-    .btn-reset-zoom:hover { border-color: var(--primary); color: var(--primary); }
     .chart-wrap { position: relative; }
-    .chart-wrap canvas { width: 100% !important; cursor: crosshair; }
-    .zoom-hint { font-size: 10px; color: var(--muted); opacity: .6; margin-top: 6px; text-align: right; }
 
     /* ── Legend ── */
     .legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
@@ -275,6 +262,45 @@
       font-size: 11px; font-weight: 700; text-transform: uppercase;
       letter-spacing: .7px; color: var(--muted); margin: 26px 0 12px;
     }
+
+    /* ── Time range filter ── */
+    .time-filter-bar {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 12px 20px;
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+      margin-bottom: 20px;
+    }
+    .time-filter-label {
+      font-size: 12px; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .5px; white-space: nowrap;
+    }
+    .time-filter-inputs { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .time-filter-input {
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--text); padding: 6px 10px; border-radius: 8px;
+      font-size: 12px; font-family: monospace; cursor: pointer;
+      transition: border-color .15s;
+    }
+    .time-filter-input:focus { outline: none; border-color: var(--primary); }
+    .time-filter-sep { color: var(--muted); font-size: 13px; }
+    .btn-apply-filter {
+      background: var(--primary); color: #fff; border: none;
+      padding: 6px 16px; border-radius: 8px; font-size: 12px;
+      font-weight: 600; cursor: pointer; transition: opacity .15s; white-space: nowrap;
+    }
+    .btn-apply-filter:hover { opacity: .85; }
+    .btn-reset-filter {
+      background: none; border: 1px solid var(--border); color: var(--muted);
+      padding: 6px 12px; border-radius: 8px; font-size: 12px;
+      cursor: pointer; transition: all .15s; white-space: nowrap;
+    }
+    .btn-reset-filter:hover { border-color: var(--danger); color: var(--danger); }
+    .filter-badge {
+      font-size: 11px; color: var(--muted);
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 20px; padding: 3px 10px; white-space: nowrap;
+    }
+    .filter-badge.active { background: var(--primary-dim); border-color: var(--primary); color: var(--primary); }
   </style>
 </head>
 <body>
@@ -329,6 +355,21 @@
       <button class="btn-ghost" onclick="resetUI()">✕ Clear</button>
     </div>
 
+    <!-- Time range filter -->
+    <div class="time-filter-bar">
+      <span class="time-filter-label">Time range</span>
+      <div class="time-filter-inputs">
+        <input class="time-filter-input" type="datetime-local" id="timeFrom" step="1"
+               title="Filter from this time" />
+        <span class="time-filter-sep">→</span>
+        <input class="time-filter-input" type="datetime-local" id="timeTo" step="1"
+               title="Filter to this time" />
+      </div>
+      <button class="btn-apply-filter" onclick="applyTimeFilter()">Apply</button>
+      <button class="btn-reset-filter" onclick="resetTimeFilter()">Reset</button>
+      <span class="filter-badge" id="filterBadge"></span>
+    </div>
+
     <!-- Stats -->
     <div class="section-heading">Summary</div>
     <div class="stats-row" id="statsRow"></div>
@@ -340,62 +381,39 @@
       <div class="chart-card chart-full">
         <div class="chart-card-header">
           <div><h3>Total Heap Usage Over Time</h3></div>
-          <button class="btn-reset-zoom" id="resetHeap" onclick="resetZoom('chartHeap')">↺ Reset zoom</button>
         </div>
         <div class="chart-desc">
           Used memory before each GC (shows fill) vs after each GC (shows live set) — plus heap capacity. Values in MB.
           Scroll to zoom · drag to pan · double-click to reset.
         </div>
-        <div class="chart-wrap" style="height:260px">
-          <canvas id="chartHeap"></canvas>
-        </div>
-        <div class="legend">
-          <div class="legend-item"><div class="legend-dot" style="background:#f472b6"></div> Before GC (heap fill)</div>
-          <div class="legend-item"><div class="legend-dot" style="background:#a78bfa"></div> After GC (live set)</div>
-          <div class="legend-item"><div class="legend-dot" style="background:#475569; opacity:.6"></div> Heap Capacity</div>
-        </div>
+        <div class="chart-wrap"><div id="chartHeap"></div></div>
       </div>
 
       <div class="chart-card chart-full">
         <div class="chart-card-header">
           <div><h3>Heap Region Breakdown (after GC)</h3></div>
-          <button class="btn-reset-zoom" id="resetRegion" onclick="resetZoom('chartRegion')">↺ Reset zoom</button>
         </div>
         <div class="chart-desc">
           Used memory stacked by region — Nursery Allocate · Nursery Survivor · Tenure SOA · Tenure LOA. Values in MB.
           Scroll to zoom · drag to pan · double-click to reset.
         </div>
-        <div class="chart-wrap" style="height:260px">
-          <canvas id="chartRegion"></canvas>
-        </div>
-        <div class="legend">
-          <div class="legend-item"><div class="legend-dot" style="background:#6366f1"></div> Nursery Allocate</div>
-          <div class="legend-item"><div class="legend-dot" style="background:#a855f7"></div> Nursery Survivor</div>
-          <div class="legend-item"><div class="legend-dot" style="background:#06b6d4"></div> Tenure SOA</div>
-          <div class="legend-item"><div class="legend-dot" style="background:#0ea5e9"></div> Tenure LOA</div>
-        </div>
+        <div class="chart-wrap"><div id="chartRegion"></div></div>
       </div>
 
       <div class="chart-card">
         <div class="chart-card-header">
           <div><h3>Nursery Region Sizes Over Time</h3></div>
-          <button class="btn-reset-zoom" id="resetNursery" onclick="resetZoom('chartNursery')">↺ Reset zoom</button>
         </div>
         <div class="chart-desc">Nursery total capacity and allocate / survivor split (MB). Shows heap resizes. Scroll to zoom.</div>
-        <div class="chart-wrap" style="height:240px">
-          <canvas id="chartNursery"></canvas>
-        </div>
+        <div class="chart-wrap"><div id="chartNursery"></div></div>
       </div>
 
       <div class="chart-card">
         <div class="chart-card-header">
           <div><h3>Tenure Region Sizes Over Time</h3></div>
-          <button class="btn-reset-zoom" id="resetTenure" onclick="resetZoom('chartTenure')">↺ Reset zoom</button>
         </div>
         <div class="chart-desc">Tenure total capacity and SOA / LOA used (MB). Rises between major GCs. Scroll to zoom.</div>
-        <div class="chart-wrap" style="height:240px">
-          <canvas id="chartTenure"></canvas>
-        </div>
+        <div class="chart-wrap"><div id="chartTenure"></div></div>
       </div>
 
     </div>
@@ -407,37 +425,28 @@
       <div class="chart-card chart-full">
         <div class="chart-card-header">
           <div><h3>Pause Duration Over Time</h3></div>
-          <button class="btn-reset-zoom" id="resetPause" onclick="resetZoom('chartPause')">↺ Reset zoom</button>
         </div>
         <div class="chart-desc">
           Each dot = one GC pause. Green = scavenge (minor). Amber = global (major). Y-axis in ms.
           Scroll to zoom · drag to pan · double-click to reset.
         </div>
-        <div class="chart-wrap" style="height:220px">
-          <canvas id="chartPause"></canvas>
-        </div>
+        <div class="chart-wrap"><div id="chartPause"></div></div>
       </div>
 
       <div class="chart-card">
         <div class="chart-card-header">
           <div><h3>Pause Duration Distribution</h3></div>
-          <button class="btn-reset-zoom" id="resetHisto" onclick="resetZoom('chartHisto')">↺ Reset zoom</button>
         </div>
         <div class="chart-desc">Histogram of pause times — scavenge (green) and global (amber). Scroll to zoom.</div>
-        <div class="chart-wrap" style="height:220px">
-          <canvas id="chartHisto"></canvas>
-        </div>
+        <div class="chart-wrap"><div id="chartHisto"></div></div>
       </div>
 
       <div class="chart-card">
         <div class="chart-card-header">
           <div><h3>Memory Freed per GC Event</h3></div>
-          <button class="btn-reset-zoom" id="resetFreed" onclick="resetZoom('chartFreed')">↺ Reset zoom</button>
         </div>
         <div class="chart-desc">Heap memory reclaimed (MB) by each collection event. Scroll to zoom.</div>
-        <div class="chart-wrap" style="height:220px">
-          <canvas id="chartFreed"></canvas>
-        </div>
+        <div class="chart-wrap"><div id="chartFreed"></div></div>
       </div>
 
     </div>
@@ -491,7 +500,9 @@ let gcData = null;
 let filteredEvents = [];
 let currentPage = 0;
 const PAGE = 50;
-const charts = {};
+const CHART_IDS = ['chartHeap','chartRegion','chartNursery','chartTenure','chartPause','chartHisto','chartFreed'];
+let timeRangeStart = null; // Date | null
+let timeRangeEnd   = null; // Date | null
 
 // ─────────────────────────────────────────────
 // Theme
@@ -500,7 +511,7 @@ function setTheme(t) {
   document.documentElement.setAttribute('data-theme', t);
   document.getElementById('pillDark').classList.toggle('on', t === 'dark');
   document.getElementById('pillLight').classList.toggle('on', t === 'light');
-  if (gcData) rebuildCharts();
+  if (gcData) rebuildCharts(getTimeFilteredEvents());
 }
 
 if (window.matchMedia('(prefers-color-scheme: light)').matches) setTheme('light');
@@ -566,8 +577,8 @@ function showSection(name) {
 
 function resetUI() {
   gcData = null; filteredEvents = [];
-  Object.values(charts).forEach(c => c?.destroy());
-  Object.keys(charts).forEach(k => delete charts[k]);
+  timeRangeStart = null; timeRangeEnd = null;
+  CHART_IDS.forEach(id => { try { Plotly.purge(id); } catch(e) {} });
   fileInput.value = '';
   document.getElementById('headerFilename').textContent = '';
   showSection('upload');
@@ -724,10 +735,19 @@ function renderDashboard() {
     document.getElementById('infoElapsed').textContent = '—';
   }
 
+  // Reset time range and populate inputs with full log span
+  timeRangeStart = null;
+  timeRangeEnd   = null;
+  if (events.length) {
+    document.getElementById('timeFrom').value = toInputDatetime(events[0].ts);
+    document.getElementById('timeTo').value   = toInputDatetime(events[events.length - 1].ts);
+  }
+
   renderStats(events, maxHeap);
   filteredEvents = [...events];
   currentPage = 0;
-  rebuildCharts();
+  rebuildCharts(events);
+  updateFilterBadge(events.length);
   renderTable();
 }
 
@@ -777,19 +797,53 @@ function renderStats(events, maxHeap) {
 }
 
 // ─────────────────────────────────────────────
-// Charts
+// Charts (Plotly)
 // ─────────────────────────────────────────────
 function cssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
-function themeDefaults() {
-  return {
-    grid:  cssVar('--border'),
-    text:  cssVar('--muted'),
-    bg:    cssVar('--surface'),
+function plotlyLayout({ yAxisTitle, xAxisTitle, xAxisType, showlegend, height, barmode } = {}) {
+  const bg    = cssVar('--surface');
+  const grid  = cssVar('--border');
+  const txt   = cssVar('--text');
+  const muted = cssVar('--muted');
+  const layout = {
+    paper_bgcolor: bg,
+    plot_bgcolor:  bg,
+    font:   { color: txt, size: 11, family: "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif" },
+    margin: { t: 16, r: 16, b: showlegend ? 72 : 48, l: 64 },
+    xaxis: {
+      type: xAxisType || 'date',
+      gridcolor: grid, linecolor: grid, tickcolor: grid,
+      tickfont: { color: muted, size: 10 }, zerolinecolor: grid,
+    },
+    yaxis: {
+      gridcolor: grid, linecolor: grid, tickcolor: grid,
+      tickfont: { color: muted, size: 10 }, zerolinecolor: grid,
+    },
+    showlegend: !!showlegend,
+    hovermode: 'closest',
+    modebar: { bgcolor: 'transparent', color: muted, activecolor: cssVar('--primary') },
   };
+  if (yAxisTitle) layout.yaxis.title = { text: yAxisTitle, font: { color: muted, size: 11 } };
+  if (xAxisTitle) layout.xaxis.title = { text: xAxisTitle, font: { color: muted, size: 11 } };
+  if (showlegend) layout.legend = {
+    font: { color: txt, size: 11 }, bgcolor: 'rgba(0,0,0,0)',
+    orientation: 'h', y: -0.22, x: 0.5, xanchor: 'center',
+  };
+  if (height)  layout.height  = height;
+  if (barmode) layout.barmode = barmode;
+  return layout;
 }
+
+const PLOTLY_CFG = {
+  responsive: true,
+  displayModeBar: true,
+  displaylogo: false,
+  scrollZoom: true,
+  modeBarButtonsToRemove: ['select2d', 'lasso2d', 'toImage', 'toggleSpikelines'],
+};
 
 function downsample(arr, max) {
   if (arr.length <= max) return arr;
@@ -799,90 +853,9 @@ function downsample(arr, max) {
   return result;
 }
 
-// Map chart canvas id → reset-button element id
-const RESET_BTN = {
-  chartHeap: 'resetHeap', chartRegion: 'resetRegion',
-  chartNursery: 'resetNursery', chartTenure: 'resetTenure',
-  chartPause: 'resetPause', chartHisto: 'resetHisto', chartFreed: 'resetFreed',
-};
-
-function resetZoom(chartId) {
-  charts[chartId]?.resetZoom();
-  document.getElementById(RESET_BTN[chartId])?.classList.remove('visible');
-}
-
-function zoomPlugin() {
-  return {
-    zoom: {
-      wheel:  { enabled: true, speed: 0.1 },
-      pinch:  { enabled: true },
-      mode:   'xy',
-      onZoom: ({ chart }) => {
-        const btn = RESET_BTN[chart.canvas.id];
-        if (btn) document.getElementById(btn)?.classList.add('visible');
-      }
-    },
-    pan: {
-      enabled: true,
-      mode:    'xy',
-      onPan:   ({ chart }) => {
-        const btn = RESET_BTN[chart.canvas.id];
-        if (btn) document.getElementById(btn)?.classList.add('visible');
-      }
-    },
-  };
-}
-
-function baseOptions(height) {
-  const t = themeDefaults();
-  return {
-    responsive: true, maintainAspectRatio: false,
-    animation: { duration: 300 },
-    plugins: {
-      legend: { display: false },
-      tooltip: {
-        backgroundColor: cssVar('--surface2'),
-        borderColor: cssVar('--border'),
-        borderWidth: 1,
-        titleColor: cssVar('--text'),
-        bodyColor: cssVar('--muted'),
-        padding: 10,
-      },
-      zoom: zoomPlugin(),
-    },
-    scales: {
-      x: {
-        type: 'time',
-        time: { tooltipFormat: 'HH:mm:ss.SSS', displayFormats: { second: 'HH:mm:ss', minute: 'HH:mm', millisecond: 'HH:mm:ss.SSS' } },
-        grid: { color: t.grid },
-        ticks: { color: t.text, maxTicksLimit: 8 }
-      },
-      y: {
-        grid: { color: t.grid },
-        ticks: { color: t.text }
-      }
-    }
-  };
-}
-
-function makeChart(id, cfg) {
-  const old = charts[id];
-  if (old) old.destroy();
-  // Hide reset button when rebuilding
-  document.getElementById(RESET_BTN[id])?.classList.remove('visible');
-  const canvas = document.getElementById(id);
-  canvas.style.height = '100%';
-  const ctx = canvas.getContext('2d');
-  // Double-click resets zoom
-  canvas.ondblclick = () => resetZoom(id);
-  charts[id] = new Chart(ctx, cfg);
-  return charts[id];
-}
-
-function rebuildCharts() {
-  const { events } = gcData;
+function rebuildCharts(events) {
+  if (!events) events = gcData.events;
   if (!events.length) return;
-
   buildHeapChart(events);
   buildRegionChart(events);
   buildNurseryChart(events);
@@ -892,144 +865,90 @@ function rebuildCharts() {
   buildFreedChart(events);
 }
 
-// ── Heap usage (before + after + capacity)
 function buildHeapChart(events) {
-  const MAX = 600;
-  const src = downsample(events, MAX);
-
-  const beforePts  = src.filter(e => e.before).map(e => ({ x: e.beforeTs, y: toMB(e.before.heap.used) }));
-  const afterPts   = src.map(e => ({ x: e.ts, y: toMB(e.after?.heap.used || 0) }));
-  const capPts     = src.map(e => ({ x: e.ts, y: toMB(e.after?.heap.total || 0) }));
-
-  makeChart('chartHeap', {
-    type: 'line',
-    data: {
-      datasets: [
-        { label: 'Before GC', data: beforePts, borderColor: '#f472b6', borderWidth: 1.2,
-          pointRadius: 0, fill: false, tension: 0, borderDash: [4,3] },
-        { label: 'After GC',  data: afterPts,  borderColor: '#a78bfa', borderWidth: 1.5,
-          pointRadius: 0, fill: false, tension: 0 },
-        { label: 'Capacity',  data: capPts,    borderColor: '#475569', borderWidth: 1,
-          pointRadius: 0, fill: false, tension: 0, borderDash: [6,4], borderOpacity: .4 }
-      ]
-    },
-    options: { ...baseOptions(260), scales: { ...baseOptions(260).scales, y: { ...baseOptions(260).scales.y, title: { display: true, text: 'MB', color: cssVar('--muted') } } } }
-  });
+  const src = downsample(events, 600);
+  const bf  = src.filter(e => e.before);
+  Plotly.newPlot('chartHeap', [
+    { x: bf.map(e => e.beforeTs),  y: bf.map(e => toMB(e.before.heap.used)),
+      name: 'Before GC', type: 'scatter', mode: 'lines',
+      line: { color: '#f472b6', width: 1.2, dash: 'dot' } },
+    { x: src.map(e => e.ts), y: src.map(e => toMB(e.after?.heap.used || 0)),
+      name: 'After GC',  type: 'scatter', mode: 'lines',
+      line: { color: '#a78bfa', width: 1.5 } },
+    { x: src.map(e => e.ts), y: src.map(e => toMB(e.after?.heap.total || 0)),
+      name: 'Capacity',  type: 'scatter', mode: 'lines',
+      line: { color: '#475569', width: 1, dash: 'dash' }, opacity: 0.55 },
+  ], plotlyLayout({ yAxisTitle: 'MB', showlegend: true, height: 300 }), PLOTLY_CFG);
 }
 
-// ── Region stacked area chart
 function buildRegionChart(events) {
-  const MAX = 500;
-  const src = downsample(events, MAX);
-
-  const make = (key1, key2, color, label) => ({
-    label, data: src.map(e => ({ x: e.ts, y: toMB(e.after?.[key1]?.[key2]?.used || 0) })),
-    borderColor: color, backgroundColor: color + '33',
-    borderWidth: 1.2, pointRadius: 0, fill: true, tension: 0
-  });
-
-  makeChart('chartRegion', {
-    type: 'line',
-    data: {
-      datasets: [
-        make('nursery','allocate','#6366f1','Nur. Allocate'),
-        make('nursery','survivor','#a855f7','Nur. Survivor'),
-        make('tenure','soa',      '#06b6d4','Ten. SOA'),
-        make('tenure','loa',      '#0ea5e9','Ten. LOA'),
-      ]
-    },
-    options: {
-      ...baseOptions(260),
-      scales: {
-        ...baseOptions(260).scales,
-        y: { ...baseOptions(260).scales.y, stacked: true,
-             title: { display: true, text: 'MB', color: cssVar('--muted') } }
-      }
-    }
-  });
+  const src = downsample(events, 500);
+  const xs  = src.map(e => e.ts);
+  Plotly.newPlot('chartRegion', [
+    { x: xs, y: src.map(e => toMB(e.after?.nursery?.allocate?.used || 0)),
+      name: 'Nur. Allocate', type: 'scatter', mode: 'lines',
+      stackgroup: 'one', line: { color: '#6366f1', width: 1 }, fillcolor: '#6366f133' },
+    { x: xs, y: src.map(e => toMB(e.after?.nursery?.survivor?.used || 0)),
+      name: 'Nur. Survivor', type: 'scatter', mode: 'lines',
+      stackgroup: 'one', line: { color: '#a855f7', width: 1 }, fillcolor: '#a855f733' },
+    { x: xs, y: src.map(e => toMB(e.after?.tenure?.soa?.used || 0)),
+      name: 'Ten. SOA', type: 'scatter', mode: 'lines',
+      stackgroup: 'one', line: { color: '#06b6d4', width: 1 }, fillcolor: '#06b6d433' },
+    { x: xs, y: src.map(e => toMB(e.after?.tenure?.loa?.used || 0)),
+      name: 'Ten. LOA', type: 'scatter', mode: 'lines',
+      stackgroup: 'one', line: { color: '#0ea5e9', width: 1 }, fillcolor: '#0ea5e933' },
+  ], plotlyLayout({ yAxisTitle: 'MB', showlegend: true, height: 300 }), PLOTLY_CFG);
 }
 
-// ── Nursery total + allocate + survivor
 function buildNurseryChart(events) {
-  const MAX = 500;
-  const src = downsample(events, MAX);
-
-  makeChart('chartNursery', {
-    type: 'line',
-    data: {
-      datasets: [
-        { label: 'Nursery Total', data: src.map(e => ({ x: e.ts, y: toMB(e.after?.nursery.total || 0) })),
-          borderColor: '#94a3b8', borderWidth: 1, borderDash: [5,3], pointRadius: 0, fill: false, tension: 0 },
-        { label: 'Allocate Used', data: src.map(e => ({ x: e.ts, y: toMB(e.after?.nursery.allocate.used || 0) })),
-          borderColor: '#6366f1', backgroundColor: '#6366f133', borderWidth: 1.4, pointRadius: 0, fill: true, tension: 0 },
-        { label: 'Survivor Used', data: src.map(e => ({ x: e.ts, y: toMB(e.after?.nursery.survivor.used || 0) })),
-          borderColor: '#a855f7', backgroundColor: '#a855f733', borderWidth: 1.4, pointRadius: 0, fill: true, tension: 0 },
-      ]
-    },
-    options: { ...baseOptions(240), scales: { ...baseOptions(240).scales, y: { ...baseOptions(240).scales.y, title: { display: true, text: 'MB', color: cssVar('--muted') } } } }
-  });
+  const src = downsample(events, 500);
+  const xs  = src.map(e => e.ts);
+  Plotly.newPlot('chartNursery', [
+    { x: xs, y: src.map(e => toMB(e.after?.nursery?.total || 0)),
+      name: 'Nursery Total', type: 'scatter', mode: 'lines',
+      line: { color: '#94a3b8', width: 1, dash: 'dash' } },
+    { x: xs, y: src.map(e => toMB(e.after?.nursery?.allocate?.used || 0)),
+      name: 'Allocate Used', type: 'scatter', mode: 'lines',
+      fill: 'tozeroy', line: { color: '#6366f1', width: 1.4 }, fillcolor: '#6366f133' },
+    { x: xs, y: src.map(e => toMB(e.after?.nursery?.survivor?.used || 0)),
+      name: 'Survivor Used', type: 'scatter', mode: 'lines',
+      fill: 'tozeroy', line: { color: '#a855f7', width: 1.4 }, fillcolor: '#a855f733' },
+  ], plotlyLayout({ yAxisTitle: 'MB', showlegend: true, height: 280 }), PLOTLY_CFG);
 }
 
-// ── Tenure total + soa + loa
 function buildTenureChart(events) {
-  const MAX = 500;
-  const src = downsample(events, MAX);
-
-  makeChart('chartTenure', {
-    type: 'line',
-    data: {
-      datasets: [
-        { label: 'Tenure Total', data: src.map(e => ({ x: e.ts, y: toMB(e.after?.tenure.total || 0) })),
-          borderColor: '#94a3b8', borderWidth: 1, borderDash: [5,3], pointRadius: 0, fill: false, tension: 0 },
-        { label: 'SOA Used', data: src.map(e => ({ x: e.ts, y: toMB(e.after?.tenure.soa.used || 0) })),
-          borderColor: '#06b6d4', backgroundColor: '#06b6d433', borderWidth: 1.4, pointRadius: 0, fill: true, tension: 0 },
-        { label: 'LOA Used', data: src.map(e => ({ x: e.ts, y: toMB(e.after?.tenure.loa.used || 0) })),
-          borderColor: '#0ea5e9', backgroundColor: '#0ea5e933', borderWidth: 1.4, pointRadius: 0, fill: true, tension: 0 },
-      ]
-    },
-    options: { ...baseOptions(240), scales: { ...baseOptions(240).scales, y: { ...baseOptions(240).scales.y, title: { display: true, text: 'MB', color: cssVar('--muted') } } } }
-  });
+  const src = downsample(events, 500);
+  const xs  = src.map(e => e.ts);
+  Plotly.newPlot('chartTenure', [
+    { x: xs, y: src.map(e => toMB(e.after?.tenure?.total || 0)),
+      name: 'Tenure Total', type: 'scatter', mode: 'lines',
+      line: { color: '#94a3b8', width: 1, dash: 'dash' } },
+    { x: xs, y: src.map(e => toMB(e.after?.tenure?.soa?.used || 0)),
+      name: 'SOA Used', type: 'scatter', mode: 'lines',
+      fill: 'tozeroy', line: { color: '#06b6d4', width: 1.4 }, fillcolor: '#06b6d433' },
+    { x: xs, y: src.map(e => toMB(e.after?.tenure?.loa?.used || 0)),
+      name: 'LOA Used', type: 'scatter', mode: 'lines',
+      fill: 'tozeroy', line: { color: '#0ea5e9', width: 1.4 }, fillcolor: '#0ea5e933' },
+  ], plotlyLayout({ yAxisTitle: 'MB', showlegend: true, height: 280 }), PLOTLY_CFG);
 }
 
-// ── Pause scatter (colored by type)
 function buildPauseChart(events) {
-  const scav = events.filter(e => e.type === 'scavenge');
-  const glob = events.filter(e => e.type !== 'scavenge');
-
-  const pt = e => ({ x: e.ts, y: e.dur });
-  const MAX = 800;
-
-  makeChart('chartPause', {
-    type: 'scatter',
-    data: {
-      datasets: [
-        { label: 'Scavenge', data: downsample(scav, MAX).map(pt),
-          backgroundColor: '#22c55ecc', pointRadius: 2.5, pointHoverRadius: 5 },
-        { label: 'Global',   data: downsample(glob, MAX).map(pt),
-          backgroundColor: '#f59e0bcc', pointRadius: 4, pointHoverRadius: 6 },
-      ]
-    },
-    options: {
-      ...baseOptions(220),
-      plugins: {
-        ...baseOptions(220).plugins,
-        legend: { display: true, position: 'top',
-          labels: { color: cssVar('--text'), boxWidth: 10, padding: 16, font: { size: 11 } } }
-      },
-      scales: {
-        ...baseOptions(220).scales,
-        y: { ...baseOptions(220).scales.y, title: { display: true, text: 'ms', color: cssVar('--muted') } }
-      }
-    }
-  });
+  const scav = downsample(events.filter(e => e.type === 'scavenge'), 800);
+  const glob = downsample(events.filter(e => e.type !== 'scavenge'), 800);
+  Plotly.newPlot('chartPause', [
+    { x: scav.map(e => e.ts), y: scav.map(e => e.dur),
+      name: 'Scavenge', type: 'scatter', mode: 'markers',
+      marker: { color: '#22c55ecc', size: 4 } },
+    { x: glob.map(e => e.ts), y: glob.map(e => e.dur),
+      name: 'Global', type: 'scatter', mode: 'markers',
+      marker: { color: '#f59e0bcc', size: 6 } },
+  ], plotlyLayout({ yAxisTitle: 'ms', showlegend: true, height: 260 }), PLOTLY_CFG);
 }
 
-// ── Pause histogram
 function buildHistoChart(events) {
   const buckets = [0, 0.5, 1, 2, 5, 10, 20, 50, 100, Infinity];
   const labels  = ['<0.5','0.5-1','1-2','2-5','5-10','10-20','20-50','50-100','>100'];
-
-  const countBuckets = (evts) => {
+  const count = evts => {
     const c = Array(labels.length).fill(0);
     evts.forEach(e => {
       for (let i = 0; i < buckets.length - 1; i++) {
@@ -1038,78 +957,77 @@ function buildHistoChart(events) {
     });
     return c;
   };
-
-  const scav = countBuckets(events.filter(e => e.type === 'scavenge'));
-  const glob = countBuckets(events.filter(e => e.type !== 'scavenge'));
-
-  makeChart('chartHisto', {
-    type: 'bar',
-    data: {
-      labels,
-      datasets: [
-        { label: 'Scavenge', data: scav, backgroundColor: '#22c55e99', borderColor: '#22c55e', borderWidth: 1 },
-        { label: 'Global',   data: glob, backgroundColor: '#f59e0b99', borderColor: '#f59e0b', borderWidth: 1 },
-      ]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      animation: { duration: 300 },
-      plugins: {
-        legend: { display: true, position: 'top',
-          labels: { color: cssVar('--text'), boxWidth: 10, padding: 14, font: { size: 11 } } },
-        tooltip: { backgroundColor: cssVar('--surface2'), borderColor: cssVar('--border'), borderWidth: 1,
-                   titleColor: cssVar('--text'), bodyColor: cssVar('--muted'), padding: 10 },
-        zoom: zoomPlugin(),
-      },
-      scales: {
-        x: { grid: { color: cssVar('--border') }, ticks: { color: cssVar('--muted') },
-             title: { display: true, text: 'Pause (ms)', color: cssVar('--muted') } },
-        y: { grid: { color: cssVar('--border') }, ticks: { color: cssVar('--muted') },
-             title: { display: true, text: 'Count', color: cssVar('--muted') } }
-      }
-    }
-  });
+  Plotly.newPlot('chartHisto', [
+    { x: labels, y: count(events.filter(e => e.type === 'scavenge')),
+      name: 'Scavenge', type: 'bar',
+      marker: { color: '#22c55e99', line: { color: '#22c55e', width: 1 } } },
+    { x: labels, y: count(events.filter(e => e.type !== 'scavenge')),
+      name: 'Global', type: 'bar',
+      marker: { color: '#f59e0b99', line: { color: '#f59e0b', width: 1 } } },
+  ], plotlyLayout({ xAxisTitle: 'Pause (ms)', yAxisTitle: 'Count', showlegend: true,
+                    height: 260, barmode: 'group', xAxisType: 'category' }), PLOTLY_CFG);
 }
 
-// ── Memory freed per event
 function buildFreedChart(events) {
-  const MAX = 600;
-  const src = downsample(events, MAX);
+  const src  = downsample(events, 600);
+  const scav = src.filter(e => e.type === 'scavenge' && e.before);
+  const glob = src.filter(e => e.type !== 'scavenge' && e.before);
+  Plotly.newPlot('chartFreed', [
+    { x: scav.map(e => e.ts),
+      y: scav.map(e => toMB(Math.max(0, e.before.heap.used - (e.after?.heap.used || 0)))),
+      name: 'Scavenge', type: 'scatter', mode: 'markers',
+      marker: { color: '#22c55e99', size: 4 } },
+    { x: glob.map(e => e.ts),
+      y: glob.map(e => toMB(Math.max(0, e.before.heap.used - (e.after?.heap.used || 0)))),
+      name: 'Global', type: 'scatter', mode: 'markers',
+      marker: { color: '#f59e0bcc', size: 6 } },
+  ], plotlyLayout({ yAxisTitle: 'MB freed', showlegend: true, height: 260 }), PLOTLY_CFG);
+}
 
-  const scavData = src.map(e => ({
-    x: e.ts,
-    y: e.type === 'scavenge' && e.before ? toMB(Math.max(0, e.before.heap.used - (e.after?.heap.used || 0))) : null
-  })).filter(p => p.y !== null);
-  const globData = src.map(e => ({
-    x: e.ts,
-    y: e.type === 'global' && e.before ? toMB(Math.max(0, e.before.heap.used - (e.after?.heap.used || 0))) : null
-  })).filter(p => p.y !== null);
+// ─────────────────────────────────────────────
+// Time range filter
+// ─────────────────────────────────────────────
+function toInputDatetime(date) {
+  const p = n => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${p(date.getMonth()+1)}-${p(date.getDate())}T${p(date.getHours())}:${p(date.getMinutes())}:${p(date.getSeconds())}`;
+}
 
-  makeChart('chartFreed', {
-    type: 'scatter',
-    data: {
-      datasets: [
-        { label: 'Scavenge', data: scavData, backgroundColor: '#22c55e99', pointRadius: 2.5, pointHoverRadius: 5 },
-        { label: 'Global',   data: globData, backgroundColor: '#f59e0bcc', pointRadius: 4,   pointHoverRadius: 7 },
-      ]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false, animation: { duration: 300 },
-      plugins: {
-        legend: { display: true, position: 'top',
-          labels: { color: cssVar('--text'), boxWidth: 10, padding: 14, font: { size: 11 } } },
-        tooltip: { backgroundColor: cssVar('--surface2'), borderColor: cssVar('--border'), borderWidth: 1,
-                   titleColor: cssVar('--text'), bodyColor: cssVar('--muted'), padding: 10 },
-        zoom: zoomPlugin(),
-      },
-      scales: {
-        x: { type: 'time', time: { tooltipFormat: 'HH:mm:ss.SSS', displayFormats: { second: 'HH:mm:ss', millisecond: 'HH:mm:ss.SSS' } },
-             grid: { color: cssVar('--border') }, ticks: { color: cssVar('--muted'), maxTicksLimit: 8 } },
-        y: { grid: { color: cssVar('--border') }, ticks: { color: cssVar('--muted') },
-             title: { display: true, text: 'MB freed', color: cssVar('--muted') } }
-      }
-    }
-  });
+function getTimeFilteredEvents() {
+  if (!gcData) return [];
+  let evts = gcData.events;
+  if (timeRangeStart) evts = evts.filter(e => e.ts >= timeRangeStart);
+  if (timeRangeEnd)   evts = evts.filter(e => e.ts <= timeRangeEnd);
+  return evts;
+}
+
+function applyTimeFilter() {
+  const fromVal = document.getElementById('timeFrom').value;
+  const toVal   = document.getElementById('timeTo').value;
+  timeRangeStart = fromVal ? new Date(fromVal) : null;
+  timeRangeEnd   = toVal   ? new Date(toVal)   : null;
+  const filtered = getTimeFilteredEvents();
+  rebuildCharts(filtered);
+  renderStats(filtered, gcData.maxHeap);
+  applyFilter();
+  updateFilterBadge(filtered.length);
+}
+
+function resetTimeFilter() {
+  timeRangeStart = null; timeRangeEnd = null;
+  const evts = gcData.events;
+  document.getElementById('timeFrom').value = toInputDatetime(evts[0].ts);
+  document.getElementById('timeTo').value   = toInputDatetime(evts[evts.length - 1].ts);
+  rebuildCharts(evts);
+  renderStats(evts, gcData.maxHeap);
+  applyFilter();
+  updateFilterBadge(evts.length);
+}
+
+function updateFilterBadge(count) {
+  const badge = document.getElementById('filterBadge');
+  const total = gcData.events.length;
+  badge.textContent = `${count.toLocaleString()} of ${total.toLocaleString()} events`;
+  badge.classList.toggle('active', count < total);
 }
 
 // ─────────────────────────────────────────────
@@ -1117,7 +1035,8 @@ function buildFreedChart(events) {
 // ─────────────────────────────────────────────
 function applyFilter() {
   const val = document.getElementById('typeFilter').value;
-  filteredEvents = val ? gcData.events.filter(e => e.type === val) : [...gcData.events];
+  const base = getTimeFilteredEvents();
+  filteredEvents = val ? base.filter(e => e.type === val) : [...base];
   currentPage = 0;
   renderTable();
 }
